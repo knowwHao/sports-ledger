@@ -1,0 +1,91 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { Check } from 'lucide-vue-next'
+import SportBadge from './SportBadge.vue'
+import type { Id, LedgerData } from '@/types'
+import { indexLedger, memberLines } from '@/lib/ledger'
+import { sessionCoverage, type PairCoverage, type SettleReason } from '@/lib/balance'
+import { formatMoney, sessionSubtitle, sessionTitle } from '@/lib/format'
+
+const props = defineProps<{
+  data: LedgerData
+  memberId: Id
+  settlements: Map<Id, SettleReason>
+  actionable?: boolean
+  busy?: string | null
+}>()
+const emit = defineEmits<{ pay: [pair: PairCoverage, sessionId: Id]; open: [sessionId: Id] }>()
+
+const idx = computed(() => indexLedger(props.data))
+
+const groups = computed(() => {
+  const map = new Map<Id, { sessionId: Id; lines: ReturnType<typeof memberLines> }>()
+  for (const line of memberLines(props.data, props.memberId)) {
+    const g = map.get(line.session.id) ?? { sessionId: line.session.id, lines: [] }
+    g.lines.push(line)
+    map.set(line.session.id, g)
+  }
+  return [...map.values()].map((g) => {
+    const session = g.lines[0].session
+    const pairs = sessionCoverage(props.data, g.sessionId).filter((p) => p.member_id === props.memberId)
+    const advanced = props.data.expenses.filter((e) => e.session_id === g.sessionId && e.payer_member_id === props.memberId)
+    return {
+      session,
+      sport: idx.value.sport(session.sport_id),
+      lines: g.lines,
+      pairs,
+      advanced,
+      settled: props.settlements.get(g.sessionId),
+    }
+  })
+})
+</script>
+
+<template>
+  <div class="space-y-3">
+    <div v-for="g in groups" :key="g.session.id" class="card overflow-hidden">
+      <button type="button" class="flex w-full items-start justify-between gap-3 px-4 pt-4 pb-2 text-left" @click="emit('open', g.session.id)">
+        <div class="min-w-0">
+          <p class="truncate font-bold">{{ sessionTitle(g.session) }}</p>
+          <p class="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-400 dark:text-ink-300">
+            <SportBadge :sport="g.sport" />{{ sessionSubtitle(g.session) }}
+          </p>
+        </div>
+        <span v-if="g.settled" class="chip-done shrink-0">{{ g.settled === 'netted' ? '已抵銷' : '已結清' }}</span>
+        <span v-else class="chip-open shrink-0">未結清</span>
+      </button>
+      <ul class="space-y-1 px-4 pb-2 text-sm">
+        <li v-for="l in g.lines" :key="l.expense.id" class="flex justify-between gap-3 text-ink-500 dark:text-ink-300">
+          <span class="truncate">{{ l.expense.label }}<template v-if="l.isPayer">（自己墊付）</template></span>
+          <span class="num">{{ formatMoney(l.share.amount_due) }}</span>
+        </li>
+        <li v-for="e in g.advanced" :key="`adv-${e.id}`" class="flex justify-between gap-3 text-ball-700 dark:text-ball-400">
+          <span class="truncate">墊付「{{ e.label }}」</span>
+          <span class="num">+{{ formatMoney(e.amount) }}</span>
+        </li>
+      </ul>
+      <ul v-if="g.pairs.length" class="divide-y divide-ink-100 border-t border-ink-100 dark:divide-ink-800 dark:border-ink-800">
+        <li v-for="p in g.pairs" :key="p.payer_id" class="flex items-center gap-3 px-4 py-2.5">
+          <p class="min-w-0 flex-1 truncate text-sm">
+            付給 <span class="font-semibold">{{ idx.member(p.payer_id).name }}</span>
+            <span class="num ml-1 font-bold">{{ formatMoney(p.due) }}</span>
+          </p>
+          <span v-if="p.paid >= p.due" class="chip-done"><Check class="size-3" />已付</span>
+          <template v-else>
+            <span v-if="p.paid > 0" class="chip-open num">已付 {{ formatMoney(p.paid) }}</span>
+            <button
+              v-if="actionable && !g.settled"
+              type="button"
+              class="btn-outline !px-3 !py-1.5 text-xs"
+              :disabled="busy === `${g.session.id}:${p.payer_id}`"
+              @click="emit('pay', p, g.session.id)"
+            >
+              <Check class="size-3.5" />標記已付
+            </button>
+            <span v-else-if="!p.paid" class="chip-muted">{{ g.settled ? '已抵銷' : '未付' }}</span>
+          </template>
+        </li>
+      </ul>
+    </div>
+  </div>
+</template>
