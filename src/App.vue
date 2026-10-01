@@ -5,6 +5,7 @@ import AppShell from '@/components/AppShell.vue'
 import DemoBanner from '@/components/DemoBanner.vue'
 import ToastHost from '@/components/ToastHost.vue'
 import ConfirmHost from '@/components/ConfirmHost.vue'
+import UpdatePrompt from '@/components/UpdatePrompt.vue'
 import AccessView from '@/views/AccessView.vue'
 import { isDemo } from '@/data'
 import { useAccessStore } from '@/stores/access'
@@ -27,6 +28,7 @@ useDocumentTitle()
       <component :is="Component" :key="route.path" />
     </AppShell>
   </RouterView>
+  <UpdatePrompt />
   <ToastHost />
   <ConfirmHost />
 </template>
