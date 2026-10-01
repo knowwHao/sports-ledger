@@ -3,6 +3,7 @@
 球隊運動費用分攤帳本 SPA：記錄場次費用與付款，跨運動抵銷欠款並算出最少轉帳。
 Vue 3 + Vite + TypeScript + Tailwind CSS v4 + Pinia + Vue Router（hash 模式）+ PWA；
 資料在 Supabase（未設定 env 時進 Demo 模式，存 localStorage）；部署在 GitHub Pages。
+不做帳號登入：拿到球隊連結 `#/t/<token>` 的人都能讀寫，token 走 `x-team-token` header、由 RLS 比對。
 人看的完整說明在 `README.md`。
 
 ## 常用指令
@@ -20,24 +21,28 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 - **不做 CSV 匯出**：使用者明確拒絕過，不要提議也不要實作
 - **禁用 `v-html`**：使用者輸入一律走文字插值
 - **金鑰**：Supabase anon key 只能透過 env 注入，不得寫死；任何地方都不得使用 `service_role` key
-- **改 schema**：RLS 政策、`get_public_ledger` 回傳內容、`schema.sql` 可重複執行，三者一起維護；
+- **改 schema**：每張表都要有 `team_all` policy（`using`／`with check` 都是 `team_token_ok()`）、
+  收回 anon／authenticated 的 truncate，且 `schema.sql` 可重複執行；
   改完用 PGlite（`@electric-sql/pglite`，不在依賴內，臨時裝在專案外）實跑 `schema.sql` 兩次，
-  需先替身 Supabase 的 `auth.users` 表與 `anon`／`authenticated` 角色；
-  並同步 `src/types.ts`、兩個 repo 實作與 `src/data/demoSeed.ts`
+  需先替身 `anon`／`authenticated` 角色，以 `set_config('request.headers', '{"x-team-token":"…"}', true)` 模擬 header，
+  驗沒帶／帶錯 token 讀不到也寫不進；並同步 `src/types.ts`、兩個 repo 實作與 `src/data/demoSeed.ts`
 - **改金額或結算邏輯**：先在 `src/lib/balance.test.ts` 補會失敗的測試，再改 `balance.ts`；金額一律整數新台幣
 - **手機版**：375px 寬不可水平溢出（`document.documentElement.scrollWidth` 不得大於視窗寬）
-- 路由是 hash 模式，站內連結用 router 產生；完整網址參考 `src/views/SettingsView.vue` 的 `shareUrl`
+- 路由是 hash 模式，站內連結用 router 產生；完整網址參考 `src/views/SettingsView.vue` 的 `teamUrl`
 
 ## 目錄地圖
 
 - `src/lib/balance.ts`：分攤、淨餘額、最少轉帳、結清判定的**唯一來源**（純函式），測試 `balance.test.ts`
 - `src/lib/ledger.ts`：畫面用彙整與排序；`src/lib/format.ts`：金額與日期格式
-- `src/data/repository.ts`：資料層介面；實作 `supabaseRepo.ts`（Supabase）、`demoRepo.ts`（localStorage）
+- `src/data/repository.ts`：資料層介面與 `InvalidTokenError`；實作 `supabaseRepo.ts`（Supabase）、
+  `demoRepo.ts`（localStorage，以 `guard()` 模擬 RLS 的 token 檢查）
 - `src/data/index.ts`：依 `VITE_SUPABASE_*` 有無選 repo；`demoSeed.ts` 是 Demo 示範資料
-- `src/types.ts`：資料型別；`src/stores/`：Pinia（`auth.ts`、`ledger.ts`）；`src/views/`、`src/components/`、`src/composables/`
-- `src/router.ts`：路由與登入守衛；`/s/:token` 是免登入的唯讀分享頁（`src/views/ShareView.vue`）
-- `supabase/schema.sql`：資料表、RLS、`get_public_ledger`／`regenerate_share_token` RPC、預設運動種子資料
-- `.github/workflows/deploy.yml`：測試、打包、部署 Pages；`keepalive.yml`：每日呼叫 Supabase
+- `src/types.ts`：資料型別；`src/stores/`：Pinia（`access.ts` 球隊 token 與存取狀態、`ledger.ts`）
+- `src/router.ts`：路由；`/t/:token` 記下 token 後以 replace 導回 `/`，網址不留 token
+- `src/App.vue`：存取狀態不是 ok 時一律顯示 `src/views/AccessView.vue`（說明頁／失效頁）
+- 「我是誰」：`src/composables/useWhoAmI.ts`＋`src/components/WhoAmIPicker.vue`（AppShell 頁首）
+- `supabase/schema.sql`：資料表、RLS、`team_token_ok()`／`regenerate_team_token()`、預設運動種子資料
+- `.github/workflows/deploy.yml`：測試、打包、部署 Pages；`keepalive.yml`：每日不帶 token GET sports，預期 `[]`
 - `vite.config.ts`：`base` 依 `VITE_BASE`／`GITHUB_REPOSITORY` 決定、PWA manifest
 - `.claude/launch.json`：瀏覽器預覽設定 `sports-ledger`（跑 `npm run dev`，port 5173）
 

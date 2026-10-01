@@ -1,64 +1,43 @@
-import { createClient, type SupabaseClient, type User } from '@supabase/supabase-js'
-import type { AuthUser, ExpenseInput, Id, LedgerData, Member, PaymentInput, Session, SessionInput, Settings, SportInput } from '@/types'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import type { ExpenseInput, Id, LedgerData, Member, PaymentInput, Session, SessionInput, SportInput } from '@/types'
 import type { ShareDue } from '@/lib/balance'
-import type { LedgerRepository, MemberPatch, SessionPatch, SportPatch } from './repository'
-
-function toAuthUser(u: User | null | undefined): AuthUser | null {
-  return u ? { id: u.id, email: u.email ?? null } : null
-}
+import { InvalidTokenError, type LedgerRepository, type MemberPatch, type SessionPatch, type SportPatch } from './repository'
 
 /** 查詢成功時 data 必定有值；寫入類操作的回傳值不會被使用 */
-function check<T>(res: { data: T | null; error: { message: string } | null }): T {
+function check<T>(res: { data: T | null; error: { message: string; code?: string } | null }): T {
+  // 42501：RLS 擋下寫入或 regenerate_team_token 拒絕，代表 token 已失效
+  if (res.error?.code === '42501') throw new InvalidTokenError()
   if (res.error) throw new Error(res.error.message)
   return res.data as T
-}
-
-const AUTH_ERRORS: Record<string, string> = {
-  'Invalid login credentials': '帳號或密碼錯誤',
-  'Email not confirmed': '這個帳號的 Email 尚未驗證',
 }
 
 export class SupabaseRepo implements LedgerRepository {
   readonly mode = 'supabase' as const
   private sb: SupabaseClient
 
-  constructor(url: string, anonKey: string) {
-    this.sb = createClient(url, anonKey, {
-      auth: { persistSession: true, autoRefreshToken: true, storageKey: 'pbl-auth' },
+  constructor(
+    private readonly url: string,
+    private readonly anonKey: string,
+  ) {
+    this.sb = this.createClient(null)
+  }
+
+  private createClient(token: string | null) {
+    return createClient(this.url, this.anonKey, {
+      // 不使用 Supabase Auth；不保存 session，換 token 重建 client 時才不會搶同一份 storage
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      // schema.sql 的 team_token_ok() 從這個 header 比對 token
+      global: { headers: token ? { 'x-team-token': token } : {} },
     })
   }
 
-  async getUser() {
-    const { data } = await this.sb.auth.getSession()
-    return toAuthUser(data.session?.user)
-  }
-
-  async isAdmin() {
-    const user = await this.getUser()
-    if (!user) return false
-    const { data, error } = await this.sb.from('admins').select('user_id').eq('user_id', user.id).maybeSingle()
-    if (error) throw new Error(error.message)
-    return !!data
-  }
-
-  async signIn(email: string, password: string) {
-    const { error } = await this.sb.auth.signInWithPassword({ email, password })
-    if (error) throw new Error(AUTH_ERRORS[error.message] ?? error.message)
-  }
-
-  async signOut() {
-    const { error } = await this.sb.auth.signOut()
-    if (error) throw new Error(error.message)
-  }
-
-  onAuthChange(cb: (u: AuthUser | null) => void) {
-    const { data } = this.sb.auth.onAuthStateChange((_event, session) => cb(toAuthUser(session?.user)))
-    return () => data.subscription.unsubscribe()
+  setTeamToken(token: string | null) {
+    this.sb = this.createClient(token)
   }
 
   async loadLedger(): Promise<LedgerData> {
     const [settings, sports, members, sessions, attendances, expenses, shares, payments] = await Promise.all([
-      this.sb.from('settings').select('team_name, updated_at').eq('id', 1).single(),
+      this.sb.from('settings').select('team_name, updated_at').eq('id', 1).maybeSingle(),
       this.sb.from('sports').select('*').order('sort_order'),
       this.sb.from('members').select('*').order('sort_order'),
       this.sb.from('sessions').select('*'),
@@ -67,7 +46,9 @@ export class SupabaseRepo implements LedgerRepository {
       this.sb.from('expense_shares').select('expense_id, member_id, amount_due'),
       this.sb.from('payments').select('*'),
     ])
+    // token 不符時 RLS 讓每張表都回 0 筆而不是報錯，以 settings 那一列是否存在判斷
     const s = check(settings)
+    if (!s) throw new InvalidTokenError()
     return {
       team_name: s.team_name,
       updated_at: s.updated_at,
@@ -81,16 +62,12 @@ export class SupabaseRepo implements LedgerRepository {
     }
   }
 
-  async getSettings(): Promise<Settings> {
-    return check(await this.sb.from('settings').select('team_name, share_token, updated_at').eq('id', 1).single())
-  }
-
   async updateTeamName(name: string) {
     check(await this.sb.from('settings').update({ team_name: name }).eq('id', 1))
   }
 
-  async regenerateShareToken() {
-    return check(await this.sb.rpc('regenerate_share_token')) as string
+  async regenerateTeamToken() {
+    return check(await this.sb.rpc('regenerate_team_token')) as string
   }
 
   async createSport(input: SportInput & { sort_order: number }) {
@@ -178,10 +155,5 @@ export class SupabaseRepo implements LedgerRepository {
 
   async deletePayments(ids: Id[]) {
     if (ids.length) check(await this.sb.from('payments').delete().in('id', ids))
-  }
-
-  async getPublicLedger(token: string) {
-    const data = check(await this.sb.rpc('get_public_ledger', { p_token: token }))
-    return (data as LedgerData | null) ?? null
   }
 }

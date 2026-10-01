@@ -72,11 +72,11 @@ export interface Payment {
 
 export interface Settings {
   team_name: string
-  share_token: string
+  team_token: string
   updated_at: string
 }
 
-/** 畫面所需的整份帳本；分享頁拿到的是不含 share_token 的同結構資料 */
+/** 畫面所需的整份帳本 */
 export interface LedgerData {
   team_name: string
   updated_at: string
@@ -87,11 +87,6 @@ export interface LedgerData {
   expenses: Expense[]
   shares: ExpenseShare[]
   payments: Payment[]
-}
-
-export interface AuthUser {
-  id: Id
-  email: string | null
 }
 
 export interface SessionInput {

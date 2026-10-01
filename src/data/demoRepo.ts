@@ -1,11 +1,9 @@
-import type { AuthUser, ExpenseInput, Id, LedgerData, Member, PaymentInput, Session, SessionInput, Settings, SportInput } from '@/types'
+import type { ExpenseInput, Id, LedgerData, Member, PaymentInput, Session, SessionInput, SportInput } from '@/types'
 import type { ShareDue } from '@/lib/balance'
-import type { LedgerRepository, MemberPatch, SessionPatch, SportPatch } from './repository'
+import { InvalidTokenError, type LedgerRepository, type MemberPatch, type SessionPatch, type SportPatch } from './repository'
 import { createDemoDb, randomId, randomToken, type DemoDb } from './demoSeed'
 
 const DB_KEY = 'pbl-demo-db-v2'
-const AUTH_KEY = 'pbl-demo-auth'
-const DEMO_USER: AuthUser = { id: 'demo-admin', email: 'demo@example.com' }
 
 function readStorage(key: string): string | null {
   try {
@@ -26,7 +24,7 @@ function writeStorage(key: string, value: string) {
 export class DemoRepo implements LedgerRepository {
   readonly mode = 'demo' as const
   private db: DemoDb
-  private listeners = new Set<(u: AuthUser | null) => void>()
+  private token: string | null = null
 
   constructor() {
     this.db = this.read() ?? this.persist(createDemoDb())
@@ -37,7 +35,7 @@ export class DemoRepo implements LedgerRepository {
     if (!raw) return null
     try {
       const db = JSON.parse(raw) as DemoDb
-      return Array.isArray(db.payments) && Array.isArray(db.sports) ? db : null
+      return Array.isArray(db.payments) && Array.isArray(db.sports) && typeof db.settings?.team_token === 'string' ? db : null
     } catch {
       return null
     }
@@ -57,38 +55,28 @@ export class DemoRepo implements LedgerRepository {
     return structuredClone(v)
   }
 
-  reset() {
+  /** 換一份新的示範資料，球隊 token 也會換新；回傳新 token */
+  reset(): string {
     this.db = this.persist(createDemoDb())
+    return this.db.settings.team_token
   }
 
-  private get signedIn() {
-    return readStorage(AUTH_KEY) !== '0'
+  /** 示範資料目前的球隊 token，說明頁的「進入示範帳本」用 */
+  get teamToken() {
+    return this.db.settings.team_token
   }
 
-  async getUser() {
-    return this.signedIn ? DEMO_USER : null
+  setTeamToken(token: string | null) {
+    this.token = token
   }
 
-  async isAdmin() {
-    return this.signedIn
-  }
-
-  async signIn() {
-    writeStorage(AUTH_KEY, '1')
-    this.listeners.forEach((cb) => cb(DEMO_USER))
-  }
-
-  async signOut() {
-    writeStorage(AUTH_KEY, '0')
-    this.listeners.forEach((cb) => cb(null))
-  }
-
-  onAuthChange(cb: (u: AuthUser | null) => void) {
-    this.listeners.add(cb)
-    return () => this.listeners.delete(cb)
+  /** 模擬 Supabase RLS：token 不符就不給讀寫 */
+  private guard() {
+    if (this.token !== this.db.settings.team_token) throw new InvalidTokenError()
   }
 
   async loadLedger(): Promise<LedgerData> {
+    this.guard()
     const { settings, sports, members, sessions, attendances, expenses, shares, payments } = this.db
     return this.clone({
       team_name: settings.team_name,
@@ -103,27 +91,27 @@ export class DemoRepo implements LedgerRepository {
     })
   }
 
-  async getSettings(): Promise<Settings> {
-    return this.clone(this.db.settings)
-  }
-
   async updateTeamName(name: string) {
+    this.guard()
     this.db.settings.team_name = name
     this.commit()
   }
 
-  async regenerateShareToken() {
-    this.db.settings.share_token = randomToken()
+  async regenerateTeamToken() {
+    this.guard()
+    this.db.settings.team_token = randomToken()
     this.commit()
-    return this.db.settings.share_token
+    return this.db.settings.team_token
   }
 
   async createSport(input: SportInput & { sort_order: number }) {
+    this.guard()
     this.db.sports.push({ ...input, id: randomId(), active: true, created_at: new Date().toISOString() })
     this.commit()
   }
 
   async updateSport(id: Id, patch: SportPatch) {
+    this.guard()
     const s = this.db.sports.find((x) => x.id === id)
     if (!s) throw new Error('找不到運動')
     Object.assign(s, patch)
@@ -131,12 +119,14 @@ export class DemoRepo implements LedgerRepository {
   }
 
   async createMembers(input: Pick<Member, 'name' | 'color' | 'sort_order'>[]) {
+    this.guard()
     const now = new Date().toISOString()
     for (const m of input) this.db.members.push({ ...m, id: randomId(), active: true, created_at: now })
     this.commit()
   }
 
   async updateMember(id: Id, patch: MemberPatch) {
+    this.guard()
     const m = this.db.members.find((x) => x.id === id)
     if (!m) throw new Error('找不到成員')
     Object.assign(m, patch)
@@ -144,6 +134,7 @@ export class DemoRepo implements LedgerRepository {
   }
 
   async reorderMembers(orderedIds: Id[]) {
+    this.guard()
     orderedIds.forEach((id, i) => {
       const m = this.db.members.find((x) => x.id === id)
       if (m) m.sort_order = i
@@ -152,6 +143,7 @@ export class DemoRepo implements LedgerRepository {
   }
 
   async createSession(input: SessionInput, attendeeIds: Id[]): Promise<Session> {
+    this.guard()
     const session: Session = { ...input, id: randomId(), locked: false, created_at: new Date().toISOString() }
     this.db.sessions.push(session)
     attendeeIds.forEach((member_id) => this.db.attendances.push({ session_id: session.id, member_id }))
@@ -160,6 +152,7 @@ export class DemoRepo implements LedgerRepository {
   }
 
   async updateSession(id: Id, patch: SessionPatch) {
+    this.guard()
     const s = this.db.sessions.find((x) => x.id === id)
     if (!s) throw new Error('找不到場次')
     Object.assign(s, patch)
@@ -167,6 +160,7 @@ export class DemoRepo implements LedgerRepository {
   }
 
   async deleteSession(id: Id) {
+    this.guard()
     const expenseIds = new Set(this.db.expenses.filter((e) => e.session_id === id).map((e) => e.id))
     this.db.shares = this.db.shares.filter((s) => !expenseIds.has(s.expense_id))
     this.db.expenses = this.db.expenses.filter((e) => e.session_id !== id)
@@ -177,12 +171,14 @@ export class DemoRepo implements LedgerRepository {
   }
 
   async setAttendance(sessionId: Id, memberIds: Id[]) {
+    this.guard()
     this.db.attendances = this.db.attendances.filter((a) => a.session_id !== sessionId)
     memberIds.forEach((member_id) => this.db.attendances.push({ session_id: sessionId, member_id }))
     this.commit()
   }
 
   async saveExpense(input: ExpenseInput, shares: ShareDue[]) {
+    this.guard()
     let expense = input.id ? this.db.expenses.find((e) => e.id === input.id) : undefined
     if (expense) {
       Object.assign(expense, input)
@@ -198,25 +194,23 @@ export class DemoRepo implements LedgerRepository {
   }
 
   async deleteExpense(id: Id) {
+    this.guard()
     this.db.shares = this.db.shares.filter((s) => s.expense_id !== id)
     this.db.expenses = this.db.expenses.filter((e) => e.id !== id)
     this.commit()
   }
 
   async createPayments(input: PaymentInput[]) {
+    this.guard()
     const now = new Date().toISOString()
     for (const p of input) this.db.payments.push({ ...p, id: randomId(), created_at: now })
     this.commit()
   }
 
   async deletePayments(ids: Id[]) {
+    this.guard()
     const drop = new Set(ids)
     this.db.payments = this.db.payments.filter((p) => !drop.has(p.id))
     this.commit()
-  }
-
-  async getPublicLedger(token: string) {
-    if (token !== this.db.settings.share_token) return null
-    return this.loadLedger()
   }
 }

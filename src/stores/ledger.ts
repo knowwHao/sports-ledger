@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { repo } from '@/data'
-import type { SessionPatch, SportPatch } from '@/data/repository'
+import { InvalidTokenError, type SessionPatch, type SportPatch } from '@/data/repository'
 import type { Expense, ExpenseShare, Id, LedgerData, Member, PaymentInput, SessionInput, SportInput } from '@/types'
 import { computeDues, sessionCoverage, type DueSplit, type Transfer } from '@/lib/balance'
 import { attendeeIds, indexLedger, sortedMembers, sortedSessions, sortedSports, summarize } from '@/lib/ledger'
 import { formatMoney } from '@/lib/format'
 import { pickColor } from '@/lib/avatar'
+import { useAccessStore } from './access'
 
 export interface ExpenseDraft {
   id?: Id
@@ -61,14 +62,32 @@ export const useLedgerStore = defineStore('ledger', () => {
   const sessions = computed(() => sortedSessions(data.value.sessions))
   const summary = computed(() => summarize(data.value))
 
+  let loadSeq = 0
+
   async function refresh() {
+    // 換 token 時舊請求可能較晚回來，只採用最後一次的結果
+    const my = ++loadSeq
     loading.value = true
     try {
-      data.value = await repo.loadLedger()
-      loaded.value = true
+      const next = await repo.loadLedger()
+      if (my === loadSeq) {
+        data.value = next
+        loaded.value = true
+      }
+    } catch (e) {
+      if (my === loadSeq && e instanceof InvalidTokenError) useAccessStore().markInvalid()
+      throw e
     } finally {
-      loading.value = false
+      if (my === loadSeq) loading.value = false
     }
+  }
+
+  /** 換 token 前清掉舊帳本，避免新連結短暫看到舊資料 */
+  function reset() {
+    loadSeq++
+    data.value = EMPTY
+    loaded.value = false
+    loading.value = false
   }
 
   async function ensureLoaded() {
@@ -293,6 +312,7 @@ export const useLedgerStore = defineStore('ledger', () => {
     sessions,
     summary,
     refresh,
+    reset,
     ensureLoaded,
     sharesOf,
     createMembers,

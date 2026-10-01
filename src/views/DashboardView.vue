@@ -13,6 +13,7 @@ import TransferList from '@/components/TransferList.vue'
 import PaymentList from '@/components/PaymentList.vue'
 import PaymentModal from '@/components/PaymentModal.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
+import { useWhoAmI } from '@/composables/useWhoAmI'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
 import { sortedPayments, sessionTotals } from '@/lib/ledger'
@@ -21,6 +22,7 @@ import type { Transfer } from '@/lib/balance'
 import type { Member, Payment } from '@/types'
 
 const ledger = useLedgerReady()
+const me = useWhoAmI()
 
 const sport = ref('all')
 const busy = ref<string | null>(null)
@@ -109,6 +111,7 @@ async function removePayment(p: Payment) {
               :transfers="summary.transfers"
               :member="ledger.idx.member"
               :busy="busy"
+              :highlight-id="me"
               actionable
               @record="record"
             />
@@ -147,7 +150,7 @@ async function removePayment(p: Payment) {
         <section>
           <h2 class="section-title mb-3">每人淨餘額</h2>
           <div class="card overflow-hidden">
-            <BalanceList :members="balanceMembers" :balances="summary.balances" :link-to="memberLink" />
+            <BalanceList :members="balanceMembers" :balances="summary.balances" :link-to="memberLink" :highlight-id="me" />
           </div>
           <p class="mt-2 px-1 text-xs text-ink-400">正數＝別人欠他（應收），負數＝他欠別人（應付）</p>
         </section>

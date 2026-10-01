@@ -1,9 +1,10 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { useAccessStore } from '@/stores/access'
 
 declare module 'vue-router' {
   interface RouteMeta {
-    public?: boolean
+    /** 不套 AppShell 的全版頁面 */
+    bare?: boolean
     title?: string
   }
 }
@@ -19,17 +20,15 @@ export const router = createRouter({
     { path: '/members', component: () => import('@/views/MembersView.vue'), meta: { title: '成員' } },
     { path: '/members/:id', component: () => import('@/views/MemberDetailView.vue'), meta: { title: '成員欠款' } },
     { path: '/settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '設定' } },
-    { path: '/login', component: () => import('@/views/LoginView.vue'), meta: { public: true, title: '管理員登入' } },
-    // 分享頁不設頁名，標題只顯示 team_name
-    { path: '/s/:token', component: () => import('@/views/ShareView.vue'), meta: { public: true } },
-    { path: '/:pathMatch(.*)*', component: () => import('@/views/NotFoundView.vue'), meta: { public: true, title: '找不到頁面' } },
+    {
+      // 球隊連結：記下 token 後以 replace 導回首頁，網址與瀏覽紀錄都不留 token，避免截圖外流
+      path: '/t/:token',
+      component: { render: () => null },
+      beforeEnter: (to) => {
+        void useAccessStore().use(String(to.params.token))
+        return { path: '/', replace: true }
+      },
+    },
+    { path: '/:pathMatch(.*)*', component: () => import('@/views/NotFoundView.vue'), meta: { bare: true, title: '找不到頁面' } },
   ],
-})
-
-router.beforeEach(async (to) => {
-  if (to.meta.public) return true
-  const auth = useAuthStore()
-  await auth.init()
-  if (!auth.isAdmin) return { path: '/login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : {} }
-  return true
 })

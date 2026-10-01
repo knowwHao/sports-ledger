@@ -2,31 +2,38 @@
 -- 球友記帳 Supabase schema
 -- 在 Supabase Dashboard → SQL Editor 貼上整份執行即可；可重複執行
 --
--- 建立第一位管理員：
---   1. Authentication → Users → Add user → Create new user
---      填 Email、密碼，並勾選「Auto Confirm User」
---   2. 回到 SQL Editor 執行（把 Email 換成剛剛建立的帳號）：
---        insert into public.admins (user_id)
---        select id from auth.users
---        where email = 'you@example.com' and email_confirmed_at is not null
---        on conflict do nothing;
---   之後要加其他管理員，重複上面兩步即可
+-- 不用帳號登入：拿到「球隊連結」的人都能查看與記帳，沒有連結的人什麼都讀不到、改不了
+--   1. 執行完後取得 token：
+--        select team_token from public.settings;
+--   2. 組成球隊連結貼到球友群組：
+--        https://knowwhao.github.io/sports-ledger/#/t/<token>
+--   連結外流時到網站「設定 → 重新產生」，舊連結立即失效
+--
+-- 原理：前端在每個 API 請求帶 x-team-token header，RLS 以 team_token_ok() 比對 settings.team_token；
+-- 日後改回帳號登入時只要換掉 policy 裡的檢查條件，資料不用重建
 -- =============================================================
+
+-- ---------- 球隊連結 token ----------
+
+-- 兩個 v4 UUID 共 244 bit 隨機；用內建 gen_random_uuid 免得依賴 pgcrypto 所在的 schema
+create or replace function public.new_team_token()
+returns text
+language sql
+volatile
+set search_path = ''
+as $$
+  select replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+$$;
 
 -- ---------- 資料表 ----------
 
 create table if not exists public.settings (
-  id          int primary key default 1 check (id = 1),
-  team_name   text not null default '球友記帳',
-  share_token text not null default replace(gen_random_uuid()::text, '-', ''),
-  updated_at  timestamptz not null default now()
+  id         int primary key default 1 check (id = 1),
+  team_name  text not null default '球友記帳',
+  team_token text not null default public.new_team_token() check (length(team_token) >= 32),
+  updated_at timestamptz not null default now()
 );
 insert into public.settings (id) values (1) on conflict (id) do nothing;
-
-create table if not exists public.admins (
-  user_id    uuid primary key references auth.users (id) on delete cascade,
-  created_at timestamptz not null default now()
-);
 
 create table if not exists public.sports (
   id               uuid primary key default gen_random_uuid(),
@@ -115,15 +122,20 @@ where not exists (select 1 from public.sports);
 
 -- ---------- 權限判斷 ----------
 
--- security definer 才能在 RLS 開啟時讀 admins，否則 policy 會自我遞迴
-create or replace function public.is_admin()
+-- PostgREST 把請求 header 以小寫名稱存進 request.headers；同一連線先前設過再清掉時會是空字串而非 null
+-- security definer 才能在 RLS 開啟時讀 settings，否則 settings 自己的 policy 會遞迴
+create or replace function public.team_token_ok()
 returns boolean
 language sql
 stable
 security definer
 set search_path = ''
 as $$
-  select exists (select 1 from public.admins where user_id = auth.uid());
+  select coalesce(
+    (select s.team_token = (nullif(current_setting('request.headers', true), '')::json ->> 'x-team-token')
+       from public.settings s
+      where s.id = 1),
+    false);
 $$;
 
 -- ---------- 資料最後更新時間 ----------
@@ -160,75 +172,43 @@ declare t text;
 begin
   foreach t in array array['sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
     execute format('drop trigger if exists touch_updated_at on public.%I', t);
+    -- 用 row 層級：statement trigger 在 RLS 擋掉全部列時仍會觸發，帶錯 token 也能改到 updated_at
     execute format(
       'create trigger touch_updated_at after insert or update or delete on public.%I
-         for each statement execute function public.touch_ledger_updated_at()', t);
+         for each row execute function public.touch_ledger_updated_at()', t);
   end loop;
 end;
 $$;
 
 -- ---------- RLS ----------
--- anon 一律不可直接讀寫；只有列在 admins 的登入者可讀寫；球友透過 get_public_ledger 取得唯讀資料
+-- anon 與 authenticated 一律要帶正確的球隊 token 才能讀寫；包成 (select …) 讓每個查詢只算一次
 
 do $$
 declare t text;
 begin
   foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
     execute format('alter table public.%I enable row level security', t);
-    execute format('revoke all on public.%I from anon', t);
-    -- TRUNCATE 不受 RLS 約束，登入者即使非管理員也能清表
-    execute format('revoke truncate, trigger, references on public.%I from authenticated', t);
-    execute format('drop policy if exists admin_all on public.%I', t);
+    -- TRUNCATE 不受 RLS 約束，只能靠收回權限擋下
+    execute format('revoke truncate, trigger, references on public.%I from anon, authenticated', t);
+    execute format('drop policy if exists team_all on public.%I', t);
     execute format(
-      'create policy admin_all on public.%I for all to authenticated
-         using (public.is_admin()) with check (public.is_admin())', t);
+      'create policy team_all on public.%I for all to anon, authenticated
+         using ((select public.team_token_ok())) with check ((select public.team_token_ok()))', t);
+  end loop;
+
+  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
+    execute format('grant select, insert, update, delete on public.%I to anon, authenticated', t);
   end loop;
 end;
 $$;
 
-alter table public.admins enable row level security;
-revoke all on public.admins from anon;
-revoke truncate, trigger, references on public.admins from authenticated;
-drop policy if exists admins_read_self on public.admins;
-create policy admins_read_self on public.admins for select to authenticated
-  using (user_id = auth.uid());
+-- settings 是單列設定：只開放改 team_name，token 只能經由 regenerate_team_token() 換發，避免被改成弱 token
+revoke insert, update, delete on public.settings from anon, authenticated;
+grant select, update (team_name) on public.settings to anon, authenticated;
 
 -- ---------- RPC ----------
 
--- 分享頁用：token 正確才回傳整份帳本（不含 share_token），錯誤回 null
-create or replace function public.get_public_ledger(p_token text)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = ''
-as $$
-declare
-  s public.settings;
-begin
-  select * into s from public.settings where id = 1;
-  if not found or p_token is null or s.share_token is distinct from p_token then
-    return null;
-  end if;
-
-  return jsonb_build_object(
-    'team_name',   s.team_name,
-    'updated_at',  s.updated_at,
-    'sports',      coalesce((select jsonb_agg(to_jsonb(x) order by x.sort_order, x.created_at) from public.sports x), '[]'::jsonb),
-    'members',     coalesce((select jsonb_agg(to_jsonb(x) order by x.sort_order, x.created_at) from public.members x), '[]'::jsonb),
-    'sessions',    coalesce((select jsonb_agg(to_jsonb(x)) from public.sessions x), '[]'::jsonb),
-    'attendances', coalesce((select jsonb_agg(jsonb_build_object('session_id', x.session_id, 'member_id', x.member_id))
-                             from public.attendances x), '[]'::jsonb),
-    'expenses',    coalesce((select jsonb_agg(to_jsonb(x)) from public.expenses x), '[]'::jsonb),
-    'shares',      coalesce((select jsonb_agg(jsonb_build_object('expense_id', x.expense_id, 'member_id', x.member_id,
-                                                                 'amount_due', x.amount_due))
-                             from public.expense_shares x), '[]'::jsonb),
-    'payments',    coalesce((select jsonb_agg(to_jsonb(x)) from public.payments x), '[]'::jsonb)
-  );
-end;
-$$;
-
-create or replace function public.regenerate_share_token()
+create or replace function public.regenerate_team_token()
 returns text
 language plpgsql
 volatile
@@ -238,19 +218,22 @@ as $$
 declare
   t text;
 begin
-  if not public.is_admin() then
-    raise exception 'only admins can regenerate the share token' using errcode = '42501';
+  if not public.team_token_ok() then
+    raise exception 'invalid team token' using errcode = '42501';
   end if;
   update public.settings
-     set share_token = replace(gen_random_uuid()::text, '-', '')
+     set team_token = public.new_team_token()
    where id = 1
-  returning share_token into t;
+  returning team_token into t;
   return t;
 end;
 $$;
 
-revoke execute on function public.get_public_ledger(text) from public;
-grant execute on function public.get_public_ledger(text) to anon, authenticated;
+-- Supabase 的預設權限會把新函式的 execute 直接授予 anon／authenticated，只收回 public 不夠
+revoke execute on function public.new_team_token() from public, anon, authenticated;
 
-revoke execute on function public.regenerate_share_token() from public, anon;
-grant execute on function public.regenerate_share_token() to authenticated;
+revoke execute on function public.team_token_ok() from public;
+grant execute on function public.team_token_ok() to anon, authenticated;
+
+revoke execute on function public.regenerate_team_token() from public;
+grant execute on function public.regenerate_team_token() to anon, authenticated;

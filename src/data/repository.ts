@@ -1,5 +1,4 @@
 import type {
-  AuthUser,
   ExpenseInput,
   Id,
   LedgerData,
@@ -7,7 +6,6 @@ import type {
   PaymentInput,
   Session,
   SessionInput,
-  Settings,
   Sport,
   SportInput,
 } from '@/types'
@@ -19,19 +17,25 @@ export type MemberPatch = Partial<Pick<Member, 'name' | 'color' | 'active' | 'so
 export type SportPatch = Partial<SportInput & Pick<Sport, 'active' | 'sort_order'>>
 export type SessionPatch = Partial<SessionInput & { locked: boolean }>
 
+/** 球隊 token 不符（沒帶、打錯或已被重新產生） */
+export class InvalidTokenError extends Error {
+  constructor() {
+    super('球隊連結已失效')
+    this.name = 'InvalidTokenError'
+  }
+}
+
 export interface LedgerRepository {
   readonly mode: RepoMode
 
-  getUser(): Promise<AuthUser | null>
-  isAdmin(): Promise<boolean>
-  signIn(email: string, password: string): Promise<void>
-  signOut(): Promise<void>
-  onAuthChange(cb: (user: AuthUser | null) => void): () => void
+  /** 之後的請求都以這個球隊 token 存取；null 表示還沒有球隊連結 */
+  setTeamToken(token: string | null): void
 
+  /** token 不符時丟 InvalidTokenError */
   loadLedger(): Promise<LedgerData>
-  getSettings(): Promise<Settings>
   updateTeamName(name: string): Promise<void>
-  regenerateShareToken(): Promise<string>
+  /** 換發球隊 token 並回傳新值，舊連結立即失效 */
+  regenerateTeamToken(): Promise<string>
 
   createSport(input: SportInput & { sort_order: number }): Promise<void>
   updateSport(id: Id, patch: SportPatch): Promise<void>
@@ -51,7 +55,4 @@ export interface LedgerRepository {
 
   createPayments(payments: PaymentInput[]): Promise<void>
   deletePayments(ids: Id[]): Promise<void>
-
-  /** 分享頁用；token 不符回 null */
-  getPublicLedger(token: string): Promise<LedgerData | null>
 }

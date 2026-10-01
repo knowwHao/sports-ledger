@@ -4,6 +4,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { CalendarDays, LayoutDashboard, Settings, Users } from 'lucide-vue-next'
 import BrandMark from './BrandMark.vue'
 import ThemeToggle from './ThemeToggle.vue'
+import WhoAmIPicker from './WhoAmIPicker.vue'
 import { useLedgerStore } from '@/stores/ledger'
 import { teamNameOr } from '@/lib/title'
 
@@ -31,7 +32,8 @@ const teamName = computed(() => teamNameOr(ledger.data.team_name))
           <p class="text-xs text-ink-300">運動分攤帳本</p>
         </div>
       </div>
-      <nav class="mt-10 flex flex-col gap-1">
+      <WhoAmIPicker class="mt-6 [&_select]:!w-full [&_select]:!max-w-none" />
+      <nav class="mt-6 flex flex-col gap-1">
         <RouterLink
           v-for="item in nav"
           :key="item.to"
@@ -61,7 +63,10 @@ const teamName = computed(() => teamNameOr(ledger.data.team_name))
           <BrandMark :size="30" />
           <p class="truncate font-black tracking-tight">{{ teamName }}</p>
         </div>
-        <ThemeToggle />
+        <div class="flex shrink-0 items-center gap-1">
+          <WhoAmIPicker />
+          <ThemeToggle />
+        </div>
       </header>
 
       <main class="mx-auto w-full max-w-5xl px-4 pt-5 pb-28 sm:px-6 lg:px-10 lg:pt-10 lg:pb-12">

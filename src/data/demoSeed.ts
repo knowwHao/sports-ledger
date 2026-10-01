@@ -208,7 +208,7 @@ export function createDemoDb(today = new Date()): DemoDb {
   addPayment(byName('宜庭'), byName('怡君'), 200, at(15, 21), null, '轉帳')
 
   return {
-    settings: { team_name: '球友記帳', share_token: randomToken(), updated_at: iso(today) },
+    settings: { team_name: '球友記帳', team_token: randomToken(), updated_at: iso(today) },
     sports,
     members,
     sessions,
