@@ -5,7 +5,14 @@ import type { Transfer } from '@/lib/balance'
 import type { Id, Member } from '@/types'
 import { formatMoney } from '@/lib/format'
 
-defineProps<{ transfers: Transfer[]; member: (id: Id) => Member; actionable?: boolean; busy?: string | null; highlightId?: Id | null }>()
+/** canRecord：該列能不能按「已收到」；只有收款人本人可以，有傳就整份清單用兩行版面 */
+defineProps<{
+  transfers: Transfer[]
+  member: (id: Id) => Member
+  canRecord?: (t: Transfer) => boolean
+  busy?: string | null
+  highlightId?: Id | null
+}>()
 const emit = defineEmits<{ record: [t: Transfer] }>()
 const keyOf = (t: Transfer) => `${t.from}>${t.to}`
 </script>
@@ -26,17 +33,17 @@ const keyOf = (t: Transfer) => `${t.from}>${t.to}`
         <span class="truncate font-semibold">{{ member(t.to).name }}</span>
       </div>
       <!-- 手機版金額固定放在姓名下方，避免金額位數不同時有的列換行、有的不換 -->
-      <span class="num text-lg font-black" :class="actionable ? 'row-start-2 pl-10 sm:pl-0' : 'text-right'">
+      <span class="num text-lg font-black" :class="canRecord ? 'row-start-2 pl-10 sm:pl-0' : 'text-right'">
         {{ formatMoney(t.amount) }}
       </span>
       <button
-        v-if="actionable"
+        v-if="canRecord?.(t)"
         type="button"
         class="btn-dark col-start-2 row-span-2 row-start-1 !px-3 !py-1.5 text-xs"
         :disabled="busy === keyOf(t)"
         @click="emit('record', t)"
       >
-        <Check class="size-3.5" />已轉帳
+        <Check class="size-3.5" />已收到
       </button>
     </li>
   </ul>

@@ -39,6 +39,12 @@ const caption = computed(() =>
 )
 
 const memberLink = (m: Member) => `/members/${m.id}`
+const isMine = (to: string) => !!me.value && to === me.value
+
+function openPayment() {
+  if (!me.value) toast.info('先在右上角選擇你自己並輸入密碼，才能記錄別人付給你的錢')
+  else showPayment.value = true
+}
 const sessionOf = (id: string) => ledger.idx.sessions.get(id)
 
 async function removePayment(p: Payment) {
@@ -85,13 +91,13 @@ async function removePayment(p: Payment) {
               :transfers="summary.transfers"
               :member="ledger.idx.member"
               :highlight-id="me"
-              actionable
+              :can-record="(t) => isMine(t.to)"
               @record="(t) => (confirming = t)"
             />
             <EmptyState v-else :icon="PartyPopper" title="全隊都兩清了" description="沒有任何需要轉帳的款項" />
           </div>
           <p v-if="summary.transfers.length" class="mt-2 px-1 text-xs text-ink-400">
-            已經把大家互相欠的錢抵掉，照這份清單轉帳的筆數最少
+            已經把大家互相欠的錢抵掉，照這份清單轉帳的筆數最少；轉帳後由收款人按「已收到」
           </p>
         </section>
       </div>
@@ -107,8 +113,8 @@ async function removePayment(p: Payment) {
         <section>
           <div class="mb-3 flex items-center justify-between">
             <h2 class="section-title">付款紀錄</h2>
-            <button type="button" class="btn-ghost !px-3 !py-1.5 text-xs" @click="showPayment = true">
-              <Plus class="size-3.5" />新增付款
+            <button type="button" class="btn-ghost !px-3 !py-1.5 text-xs" @click="openPayment">
+              <Plus class="size-3.5" />記錄收款
             </button>
           </div>
           <div class="card overflow-hidden">
@@ -117,7 +123,7 @@ async function removePayment(p: Payment) {
                 :payments="shownPayments"
                 :member="ledger.idx.member"
                 :session="sessionOf"
-                deletable
+                :can-delete="(p) => isMine(p.to_member_id)"
                 @remove="removePayment"
               />
               <button
@@ -129,7 +135,7 @@ async function removePayment(p: Payment) {
                 {{ showAllPayments ? '收合' : `顯示全部 ${payments.length} 筆` }}
               </button>
             </template>
-            <EmptyState v-else :icon="ReceiptText" title="還沒有付款紀錄" description="在場次頁按「已付給…」，或在上方按「已轉帳」" />
+            <EmptyState v-else :icon="ReceiptText" title="還沒有付款紀錄" description="收款人在場次頁勾選「已付給…」，或在轉帳建議按「已收到」" />
           </div>
         </section>
       </div>

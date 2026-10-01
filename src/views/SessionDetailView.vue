@@ -11,6 +11,7 @@ import SessionStatusChip from '@/components/SessionStatusChip.vue'
 import SessionFormModal from '@/components/SessionFormModal.vue'
 import PaymentModal from '@/components/PaymentModal.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
+import { useWhoAmI } from '@/composables/useWhoAmI'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
 import { attendeeIds, sessionTotals } from '@/lib/ledger'
@@ -19,6 +20,7 @@ import { formatDate, formatMoney, sessionTitle } from '@/lib/format'
 import type { Expense, Id, Member, PaymentPreset } from '@/types'
 
 const ledger = useLedgerReady()
+const me = useWhoAmI()
 const route = useRoute()
 const router = useRouter()
 
@@ -79,6 +81,13 @@ function expenseInfo(e: Expense) {
 const busyPair = ref<string | null>(null)
 const paymentPreset = ref<PaymentPreset | null>(null)
 const pairKey = (p: PairCoverage) => `${p.member_id}>${p.payer_id}`
+/** 只有收款人（該筆費用的墊付者）本人能確認收到 */
+const canMark = (p: PairCoverage) => !!me.value && p.payer_id === me.value
+const markHint = computed(() => {
+  if (!me.value) return '只有收款人可以打勾確認收到；先在右上角選擇你自己並輸入密碼'
+  if (coverage.value.some(canMark)) return `收到錢後按「已付給 ${ledger.idx.member(me.value).name}」打勾，再按一次取消；其他款項由各自的收款人確認`
+  return '只有收款人（先付錢的人）可以打勾確認收到'
+})
 
 async function togglePair(p: PairCoverage) {
   busyPair.value = pairKey(p)
@@ -107,7 +116,6 @@ async function togglePair(p: PairCoverage) {
 function partial(p: PairCoverage) {
   paymentPreset.value = {
     from: p.member_id,
-    to: p.payer_id,
     amount: Math.max(1, p.due - p.paid),
     sessionId: sessionId.value,
     title: `${ledger.idx.member(p.member_id).name} 付給 ${ledger.idx.member(p.payer_id).name}`,
@@ -273,16 +281,18 @@ async function removeSession() {
                 <div v-for="p in row.pairs" :key="pairKey(p)" class="flex items-center gap-2">
                   <button
                     type="button"
-                    class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left text-sm font-semibold transition"
+                    class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-default"
                     :class="
                       p.paid >= p.due
                         ? 'border-ball-500 bg-ball-200/60 text-ink-900 dark:border-ball-400/50 dark:bg-ball-400/10 dark:text-ball-200'
                         : p.paid > 0
                           ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-200'
-                          : 'border-ink-200 hover:border-ink-400 dark:border-ink-700'
+                          : canMark(p)
+                            ? 'border-ink-200 hover:border-ink-400 dark:border-ink-700'
+                            : 'border-dashed border-ink-200 text-ink-400 dark:border-ink-700'
                     "
                     :aria-pressed="p.paid >= p.due"
-                    :disabled="busyPair === pairKey(p)"
+                    :disabled="!canMark(p) || busyPair === pairKey(p)"
                     @click="togglePair(p)"
                   >
                     <span class="flex min-w-0 items-center gap-1.5">
@@ -292,7 +302,7 @@ async function removeSession() {
                     </span>
                     <span class="num shrink-0">{{ formatMoney(p.due) }}</span>
                   </button>
-                  <button v-if="p.paid < p.due" type="button" class="btn-ghost shrink-0 !px-2.5 !py-2 text-xs" @click="partial(p)">
+                  <button v-if="p.paid < p.due && canMark(p)" type="button" class="btn-ghost shrink-0 !px-2.5 !py-2 text-xs" @click="partial(p)">
                     付一部分
                   </button>
                 </div>
@@ -300,7 +310,7 @@ async function removeSession() {
             </li>
           </ul>
           <p v-if="rows.length" class="border-t border-ink-100 px-5 py-3 text-xs text-ink-400 dark:border-ink-800">
-            按「已付給…」打勾，再按一次取消
+            {{ markHint }}
           </p>
         </section>
 

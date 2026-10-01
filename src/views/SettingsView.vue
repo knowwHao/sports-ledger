@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import {
   Archive,
   ArchiveRestore,
@@ -10,6 +10,8 @@ import {
   Eye,
   EyeOff,
   FlaskConical,
+  KeyRound,
+  LogOut,
   Monitor,
   Moon,
   Pencil,
@@ -27,11 +29,45 @@ import { useTheme, type ThemePref } from '@/composables/useTheme'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
 import { isDemo, repo, resetDemo } from '@/data'
+import { changePin, logout, pinFailureText, useWhoAmI } from '@/composables/useWhoAmI'
+import { isValidPin } from '@/lib/pin'
 import type { Sport } from '@/types'
 
 const ledger = useLedgerReady()
 const access = useAccessStore()
 const { pref } = useTheme()
+
+const me = useWhoAmI()
+const meMember = computed(() => (me.value ? (ledger.idx.members.get(me.value) ?? null) : null))
+const pinForm = reactive({ old: '', next: '', confirm: '' })
+const pinError = ref('')
+const savingPin = ref(false)
+const pinMismatch = computed(() => pinForm.confirm !== '' && pinForm.next !== pinForm.confirm)
+const pinFormValid = computed(() => isValidPin(pinForm.old) && isValidPin(pinForm.next) && pinForm.next === pinForm.confirm)
+watch(
+  () => [pinForm.next, pinForm.confirm],
+  () => (pinError.value = ''),
+)
+
+async function savePin() {
+  if (!pinFormValid.value || savingPin.value) return
+  savingPin.value = true
+  pinError.value = ''
+  try {
+    const r = await changePin(pinForm.old, pinForm.next)
+    if (r.ok) {
+      Object.assign(pinForm, { old: '', next: '', confirm: '' })
+      toast.success('已更新密碼')
+    } else {
+      pinError.value = pinFailureText(r)
+      pinForm.old = ''
+    }
+  } catch (e) {
+    pinError.value = errorMessage(e)
+  } finally {
+    savingPin.value = false
+  }
+}
 
 const teamName = ref('')
 const savingName = ref(false)
@@ -124,6 +160,8 @@ async function reset() {
   })
   if (!ok) return
   const t = resetDemo()
+  // 重置後成員與密碼都是新的，原本的登入憑證已不存在
+  logout()
   if (t) access.replace(t)
   await ledger.refresh()
   toast.success('已重置示範資料')
@@ -153,6 +191,39 @@ const themes: { v: ThemePref; label: string; icon: typeof Monitor }[] = [
         </div>
         <ChevronRight class="size-5 shrink-0 text-ink-300" />
       </RouterLink>
+
+      <section class="card p-5">
+        <h2 class="flex items-center gap-2 font-bold"><KeyRound class="size-5 text-ink-400" />我的密碼</h2>
+        <template v-if="meMember">
+          <p class="mt-1 text-sm text-ink-400 dark:text-ink-300">
+            目前是 <span class="font-semibold text-ink-700 dark:text-ink-100">{{ meMember.name }}</span>。密碼是 4～8 位數字，改完後其他裝置上的你要重新輸入密碼。
+          </p>
+          <form class="mt-4 space-y-3" @submit.prevent="savePin">
+            <div class="grid gap-3 sm:grid-cols-3">
+              <div>
+                <label class="label" for="pin-old">目前密碼</label>
+                <input id="pin-old" v-model="pinForm.old" class="input num" type="password" inputmode="numeric" autocomplete="current-password" maxlength="8" />
+              </div>
+              <div>
+                <label class="label" for="pin-new">新密碼</label>
+                <input id="pin-new" v-model="pinForm.next" class="input num" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" />
+              </div>
+              <div>
+                <label class="label" for="pin-confirm">再輸入一次</label>
+                <input id="pin-confirm" v-model="pinForm.confirm" class="input num" type="password" inputmode="numeric" autocomplete="new-password" maxlength="8" />
+              </div>
+            </div>
+            <p v-if="pinError" class="text-xs font-semibold text-rose-600 dark:text-rose-400">{{ pinError }}</p>
+            <p v-else-if="pinMismatch" class="text-xs font-semibold text-rose-600 dark:text-rose-400">兩次輸入的新密碼不一樣</p>
+            <p v-else-if="pinForm.next && !isValidPin(pinForm.next)" class="text-xs font-semibold text-rose-600 dark:text-rose-400">新密碼要是 4～8 位數字</p>
+            <div class="flex flex-wrap gap-2">
+              <button type="submit" class="btn-dark" :disabled="!pinFormValid || savingPin">{{ savingPin ? '更新中…' : '更新密碼' }}</button>
+              <button type="button" class="btn-ghost" @click="logout"><LogOut class="size-4" />登出</button>
+            </div>
+          </form>
+        </template>
+        <p v-else class="mt-1 text-sm text-ink-400 dark:text-ink-300">先在右上角「我是誰」選擇自己並輸入密碼，才能修改密碼。</p>
+      </section>
 
       <section class="card p-5">
         <h2 class="mb-3 font-bold">球隊名稱</h2>

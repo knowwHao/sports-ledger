@@ -4,6 +4,7 @@ import { repo } from '@/data'
 import { InvalidTokenError } from '@/data/repository'
 import { errorMessage } from '@/composables/useToast'
 import { useLedgerStore } from './ledger'
+import { logout } from '@/composables/useWhoAmI'
 
 const KEY = 'pbl-team-token'
 // 非 ASCII 字元放進 HTTP header 會讓 fetch 直接丟錯，格式不對就當作失效連結
@@ -71,6 +72,8 @@ export const useAccessStore = defineStore('access', () => {
 
   /** 改用另一個球隊 token（或 null 清除）並重新驗證 */
   function use(next: string | null) {
+    // 換到別的球隊時，原本登入的成員在新球隊不存在
+    if (next !== token.value) logout()
     token.value = next
     writeToken(next)
     return verify()

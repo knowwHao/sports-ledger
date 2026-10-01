@@ -3,7 +3,9 @@ import type {
   Id,
   LedgerData,
   Member,
+  MemberSession,
   PaymentInput,
+  PinResult,
   Session,
   SessionInput,
   Sport,
@@ -25,6 +27,22 @@ export class InvalidTokenError extends Error {
   }
 }
 
+/** 這台裝置的成員憑證已失效（密碼在別的裝置改過） */
+export class MemberSessionError extends Error {
+  constructor() {
+    super('登入已失效，請重新選擇自己並輸入密碼')
+    this.name = 'MemberSessionError'
+  }
+}
+
+/** 想記錄或刪除不是收給自己的付款 */
+export class NotPayeeError extends Error {
+  constructor() {
+    super('只有收款人可以記錄或刪除這筆付款')
+    this.name = 'NotPayeeError'
+  }
+}
+
 export interface LedgerRepository {
   readonly mode: RepoMode
 
@@ -40,7 +58,8 @@ export interface LedgerRepository {
   createSport(input: SportInput & { sort_order: number }): Promise<void>
   updateSport(id: Id, patch: SportPatch): Promise<void>
 
-  createMembers(members: Pick<Member, 'name' | 'color' | 'sort_order'>[]): Promise<void>
+  /** 每位新成員都以 pin 為初始密碼 */
+  createMembers(members: Pick<Member, 'name' | 'color' | 'sort_order'>[], pin: string): Promise<void>
   updateMember(id: Id, patch: MemberPatch): Promise<void>
   reorderMembers(orderedIds: Id[]): Promise<void>
 
@@ -53,6 +72,12 @@ export interface LedgerRepository {
   saveExpense(input: ExpenseInput, shares: ShareDue[]): Promise<Id>
   deleteExpense(id: Id): Promise<void>
 
-  createPayments(payments: PaymentInput[]): Promise<void>
-  deletePayments(ids: Id[]): Promise<void>
+  loginMember(memberId: Id, pin: string): Promise<PinResult>
+  /** 成功時回傳新憑證，舊憑證（包括其他裝置的）一併失效 */
+  changeMemberPin(memberId: Id, oldPin: string, newPin: string): Promise<PinResult>
+
+  /** 收款人是 auth 的成員；憑證失效丟 MemberSessionError */
+  createPayment(auth: MemberSession, input: PaymentInput): Promise<void>
+  /** 任一筆不是收給 auth 的成員就整批不刪，丟 NotPayeeError */
+  deletePayments(auth: MemberSession, ids: Id[]): Promise<void>
 }

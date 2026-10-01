@@ -107,14 +107,23 @@ export interface ExpenseInput {
 
 export type SportInput = Pick<Sport, 'name' | 'emoji' | 'color' | 'default_expenses'>
 
-export type PaymentInput = Pick<Payment, 'from_member_id' | 'to_member_id' | 'amount' | 'paid_at' | 'session_id' | 'note'>
+/** 收款人一律是登入的成員本人，所以不含 to_member_id */
+export type PaymentInput = Pick<Payment, 'from_member_id' | 'amount' | 'paid_at' | 'session_id' | 'note'>
+
+/** 成員輸入密碼後發給這台裝置的憑證，記錄或刪除付款時帶上 */
+export interface MemberSession {
+  memberId: Id
+  key: string
+}
+
+/** 驗證密碼的結果；失敗時帶剩餘次數，或已被鎖定到何時 */
+export type PinResult = { ok: true; key: string } | { ok: false; remaining?: number; lockedUntil?: string }
 
 export interface PaymentPreset {
   from?: Id
-  to?: Id
   amount?: number
   sessionId?: Id | null
   title?: string
-  /** 鎖住付款人與收款人，只讓使用者改金額 */
+  /** 鎖住付款人，只讓使用者改金額 */
   fixedParties?: boolean
 }

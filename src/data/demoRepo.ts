@@ -1,7 +1,27 @@
-import type { ExpenseInput, Id, LedgerData, Member, PaymentInput, Session, SessionInput, SportInput } from '@/types'
+import type {
+  ExpenseInput,
+  Id,
+  LedgerData,
+  Member,
+  MemberSession,
+  PaymentInput,
+  PinResult,
+  Session,
+  SessionInput,
+  SportInput,
+} from '@/types'
 import type { ShareDue } from '@/lib/balance'
-import { InvalidTokenError, type LedgerRepository, type MemberPatch, type SessionPatch, type SportPatch } from './repository'
-import { createDemoDb, randomId, randomToken, type DemoDb } from './demoSeed'
+import { isValidPin, PIN_LOCK_MINUTES, PIN_MAX_ATTEMPTS } from '@/lib/pin'
+import {
+  InvalidTokenError,
+  MemberSessionError,
+  NotPayeeError,
+  type LedgerRepository,
+  type MemberPatch,
+  type SessionPatch,
+  type SportPatch,
+} from './repository'
+import { createDemoDb, newDemoPin, randomId, randomToken, type DemoDb } from './demoSeed'
 
 const DB_KEY = 'pbl-demo-db-v2'
 
@@ -35,7 +55,11 @@ export class DemoRepo implements LedgerRepository {
     if (!raw) return null
     try {
       const db = JSON.parse(raw) as DemoDb
-      return Array.isArray(db.payments) && Array.isArray(db.sports) && typeof db.settings?.team_token === 'string' ? db : null
+      if (!(Array.isArray(db.payments) && Array.isArray(db.sports) && typeof db.settings?.team_token === 'string')) return null
+      // 加入密碼功能前存下的示範資料沒有 pins，與 schema.sql 一樣補上預設 0000
+      db.pins ??= {}
+      for (const m of db.members) db.pins[m.id] ??= newDemoPin()
+      return db
     } catch {
       return null
     }
@@ -73,6 +97,32 @@ export class DemoRepo implements LedgerRepository {
   /** 模擬 Supabase RLS：token 不符就不給讀寫 */
   private guard() {
     if (this.token !== this.db.settings.team_token) throw new InvalidTokenError()
+  }
+
+  /** 模擬 schema.sql 的 require_member() */
+  private guardMember(auth: MemberSession) {
+    this.guard()
+    if (this.db.pins[auth.memberId]?.key !== auth.key) throw new MemberSessionError()
+  }
+
+  /** 模擬 schema.sql 的 attempt_member_pin()：錯 5 次鎖 15 分鐘 */
+  private attemptPin(memberId: Id, pin: string): PinResult {
+    const p = this.db.pins[memberId]
+    if (!p) throw new Error('找不到成員')
+    if (p.locked_until && Date.parse(p.locked_until) > Date.now()) return { ok: false, lockedUntil: p.locked_until }
+    if (p.pin === pin) {
+      Object.assign(p, { failed: 0, locked_until: null })
+      this.commit()
+      return { ok: true, key: p.key }
+    }
+    p.failed += 1
+    let result: PinResult = { ok: false, remaining: PIN_MAX_ATTEMPTS - p.failed }
+    if (p.failed >= PIN_MAX_ATTEMPTS) {
+      Object.assign(p, { failed: 0, locked_until: new Date(Date.now() + PIN_LOCK_MINUTES * 60_000).toISOString() })
+      result = { ok: false, lockedUntil: p.locked_until! }
+    }
+    this.commit()
+    return result
   }
 
   async loadLedger(): Promise<LedgerData> {
@@ -118,10 +168,15 @@ export class DemoRepo implements LedgerRepository {
     this.commit()
   }
 
-  async createMembers(input: Pick<Member, 'name' | 'color' | 'sort_order'>[]) {
+  async createMembers(input: Pick<Member, 'name' | 'color' | 'sort_order'>[], pin: string) {
     this.guard()
+    if (!isValidPin(pin)) throw new Error('密碼要是 4～8 位數字')
     const now = new Date().toISOString()
-    for (const m of input) this.db.members.push({ ...m, id: randomId(), active: true, created_at: now })
+    for (const m of input) {
+      const id = randomId()
+      this.db.members.push({ ...m, id, active: true, created_at: now })
+      this.db.pins[id] = newDemoPin(pin)
+    }
     this.commit()
   }
 
@@ -200,16 +255,33 @@ export class DemoRepo implements LedgerRepository {
     this.commit()
   }
 
-  async createPayments(input: PaymentInput[]) {
+  async loginMember(memberId: Id, pin: string) {
     this.guard()
+    return this.attemptPin(memberId, pin)
+  }
+
+  async changeMemberPin(memberId: Id, oldPin: string, newPin: string) {
+    this.guard()
+    if (!isValidPin(newPin)) throw new Error('密碼要是 4～8 位數字')
+    const result = this.attemptPin(memberId, oldPin)
+    if (!result.ok) return result
+    this.db.pins[memberId] = newDemoPin(newPin)
+    this.commit()
+    return { ok: true as const, key: this.db.pins[memberId].key }
+  }
+
+  async createPayment(auth: MemberSession, p: PaymentInput) {
+    this.guardMember(auth)
+    if (p.from_member_id === auth.memberId) throw new Error('付款人與收款人不能是同一人')
     const now = new Date().toISOString()
-    for (const p of input) this.db.payments.push({ ...p, id: randomId(), created_at: now })
+    this.db.payments.push({ ...p, to_member_id: auth.memberId, id: randomId(), created_at: now })
     this.commit()
   }
 
-  async deletePayments(ids: Id[]) {
-    this.guard()
+  async deletePayments(auth: MemberSession, ids: Id[]) {
+    this.guardMember(auth)
     const drop = new Set(ids)
+    if (this.db.payments.some((p) => drop.has(p.id) && p.to_member_id !== auth.memberId)) throw new NotPayeeError()
     this.db.payments = this.db.payments.filter((p) => !drop.has(p.id))
     this.commit()
   }

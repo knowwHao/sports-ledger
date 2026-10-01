@@ -5,13 +5,17 @@ import ModalSheet from './ModalSheet.vue'
 import { useLedgerStore } from '@/stores/ledger'
 import { formatMoney, MAX_AMOUNT, parseDate, todayYmd } from '@/lib/format'
 import { errorMessage, toast } from '@/composables/useToast'
+import { useWhoAmI } from '@/composables/useWhoAmI'
+import MemberAvatar from './MemberAvatar.vue'
 import type { PaymentPreset } from '@/types'
 
 const props = defineProps<{ open: boolean; preset?: PaymentPreset | null }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
 const ledger = useLedgerStore()
+const me = useWhoAmI()
 
-const form = reactive({ from: '', to: '', amount: null as number | null, date: todayYmd(), note: '' })
+// 收款人固定是登入的自己，只有收款人能記錄收到的錢
+const form = reactive({ from: '', amount: null as number | null, date: todayYmd(), note: '' })
 const saving = ref(false)
 
 watch(
@@ -20,7 +24,6 @@ watch(
     if (!open) return
     Object.assign(form, {
       from: props.preset?.from ?? '',
-      to: props.preset?.to ?? '',
       amount: props.preset?.amount ?? null,
       date: todayYmd(),
       note: '',
@@ -28,14 +31,12 @@ watch(
   },
 )
 
-const people = computed(() => {
-  const ids = new Set([form.from, form.to].filter(Boolean))
-  return ledger.members.filter((m) => m.active || ids.has(m.id))
-})
+const payee = computed(() => (me.value ? ledger.idx.member(me.value) : null))
+const people = computed(() => ledger.members.filter((m) => m.id !== me.value && (m.active || m.id === form.from)))
 const amount = computed(() => Math.round(form.amount ?? 0))
 const amountTooLarge = computed(() => amount.value > MAX_AMOUNT)
 const valid = computed(
-  () => form.from && form.to && form.from !== form.to && amount.value > 0 && !amountTooLarge.value && form.date,
+  () => payee.value && form.from && form.from !== me.value && amount.value > 0 && !amountTooLarge.value && form.date,
 )
 
 function paidAtFor(ymd: string): string {
@@ -52,7 +53,6 @@ async function submit() {
   try {
     await ledger.createPayment({
       from_member_id: form.from,
-      to_member_id: form.to,
       amount: amount.value,
       paid_at: paidAtFor(form.date),
       session_id: props.preset?.sessionId ?? null,
@@ -70,7 +70,7 @@ async function submit() {
 </script>
 
 <template>
-  <ModalSheet :open="open" :title="preset?.title ?? '新增付款紀錄'" @close="emit('close')">
+  <ModalSheet :open="open" :title="preset?.title ?? '記錄收到的錢'" @close="emit('close')">
     <form id="payment-form" class="space-y-4" @submit.prevent="submit">
       <div>
         <label class="label" for="pm-from">付款人</label>
@@ -81,11 +81,10 @@ async function submit() {
       </div>
       <div class="flex justify-center text-ink-300"><ArrowDown class="size-5" /></div>
       <div>
-        <label class="label" for="pm-to">收款人</label>
-        <select id="pm-to" v-model="form.to" class="input" :disabled="preset?.fixedParties" required>
-          <option value="" disabled>選擇收款人</option>
-          <option v-for="m in people" :key="m.id" :value="m.id" :disabled="m.id === form.from">{{ m.name }}</option>
-        </select>
+        <span class="label">收款人</span>
+        <p v-if="payee" class="flex items-center gap-2 rounded-2xl bg-ink-50 px-3 py-2.5 text-sm font-semibold dark:bg-ink-950">
+          <MemberAvatar :name="payee.name" :color="payee.color" size="xs" />{{ payee.name }}（你）
+        </p>
       </div>
       <div class="grid grid-cols-2 gap-3">
         <div>

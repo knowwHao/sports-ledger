@@ -8,8 +8,8 @@ import { formatMoney, MAX_AMOUNT } from '@/lib/format'
 import { errorMessage, toast } from '@/composables/useToast'
 import type { Transfer } from '@/lib/balance'
 
-/** received＝由收款人確認「已收到」，只差在標題與按鈕文字 */
-const props = defineProps<{ transfer: Transfer | null; received?: boolean }>()
+/** 只有收款人本人會看到：確認已收到這筆轉帳 */
+const props = defineProps<{ transfer: Transfer | null }>()
 const emit = defineEmits<{ close: [] }>()
 const ledger = useLedgerStore()
 
@@ -45,7 +45,7 @@ async function submit() {
 </script>
 
 <template>
-  <ModalSheet :open="!!transfer" :title="received ? '確認已收到？' : '確認已轉帳？'" @close="emit('close')">
+  <ModalSheet :open="!!transfer" title="確認已收到？" @close="emit('close')">
     <form v-if="transfer && from && to" id="transfer-form" class="space-y-4" @submit.prevent="submit">
       <div class="flex items-center justify-center gap-3 rounded-3xl bg-ink-50 px-4 py-4 dark:bg-ink-950">
         <div class="flex min-w-0 flex-col items-center gap-1">
@@ -72,16 +72,16 @@ async function submit() {
           required
         />
         <p class="mt-1.5 text-xs text-ink-400 dark:text-ink-300">
-          <template v-if="value > 0 && value < transfer.amount">只轉一部分也可以，剩下的 {{ formatMoney(transfer.amount - value) }} 會留在帳上</template>
-          <template v-else-if="value > transfer.amount">比建議的 {{ formatMoney(transfer.amount) }} 多，多出的部分也會記在帳上</template>
-          <template v-else>照建議金額付，這筆就清了</template>
+          <template v-if="value > 0 && value < transfer.amount">只收到一部分也可以，剩下的 {{ formatMoney(transfer.amount - value) }} 會留在帳上</template>
+          <template v-else-if="value > transfer.amount">收到的比建議的 {{ formatMoney(transfer.amount) }} 多，多出的部分也會記在帳上</template>
+          <template v-else>收到建議的金額，這筆就清了</template>
         </p>
       </div>
     </form>
     <template #footer>
       <button type="button" class="btn-outline flex-1" @click="emit('close')">取消</button>
       <button type="submit" form="transfer-form" class="btn-primary flex-1" :disabled="!valid || saving">
-        {{ saving ? '記錄中…' : received ? '確認已收到' : '確認已轉帳' }}
+        {{ saving ? '記錄中…' : '確認已收到' }}
       </button>
     </template>
   </ModalSheet>

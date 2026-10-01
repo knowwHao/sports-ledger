@@ -1,15 +1,42 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import type { ExpenseInput, Id, LedgerData, Member, PaymentInput, Session, SessionInput, SportInput } from '@/types'
+import type {
+  ExpenseInput,
+  Id,
+  LedgerData,
+  Member,
+  MemberSession,
+  PaymentInput,
+  PinResult,
+  Session,
+  SessionInput,
+  SportInput,
+} from '@/types'
 import type { ShareDue } from '@/lib/balance'
-import { InvalidTokenError, type LedgerRepository, type MemberPatch, type SessionPatch, type SportPatch } from './repository'
+import {
+  InvalidTokenError,
+  MemberSessionError,
+  NotPayeeError,
+  type LedgerRepository,
+  type MemberPatch,
+  type SessionPatch,
+  type SportPatch,
+} from './repository'
 import { verifyAffected, type OnMissing } from './writeCheck'
 
 /** 查詢成功時 data 必定有值；沒接 .select() 的寫入 data 是 null，不可取用 */
 function check<T>(res: { data: T | null; error: { message: string; code?: string } | null }): T {
   // 42501：RLS 擋下寫入或 regenerate_team_token 拒絕，代表 token 已失效
   if (res.error?.code === '42501') throw new InvalidTokenError()
+  // SL401／SL403 是 schema.sql 的 require_member()、delete_payments() 自訂的錯誤碼
+  if (res.error?.code === 'SL401') throw new MemberSessionError()
+  if (res.error?.code === 'SL403') throw new NotPayeeError()
+  if (res.error?.code === '22023') throw new Error('密碼要是 4～8 位數字')
   if (res.error) throw new Error(res.error.message)
   return res.data as T
+}
+
+function toPinResult(raw: { ok: boolean; key?: string; remaining?: number; locked_until?: string }): PinResult {
+  return raw.ok && raw.key ? { ok: true, key: raw.key } : { ok: false, remaining: raw.remaining, lockedUntil: raw.locked_until }
 }
 
 export class SupabaseRepo implements LedgerRepository {
@@ -92,8 +119,8 @@ export class SupabaseRepo implements LedgerRepository {
     await this.expectAffected(await this.sb.from('sports').update(patch).eq('id', id).select('id'), 'fail')
   }
 
-  async createMembers(members: Pick<Member, 'name' | 'color' | 'sort_order'>[]) {
-    check(await this.sb.from('members').insert(members))
+  async createMembers(members: Pick<Member, 'name' | 'color' | 'sort_order'>[], pin: string) {
+    check(await this.sb.rpc('create_members', { p_members: members, p_pin: pin }))
   }
 
   async updateMember(id: Id, patch: MemberPatch) {
@@ -172,11 +199,32 @@ export class SupabaseRepo implements LedgerRepository {
     await this.expectAffected(await this.sb.from('expenses').delete().eq('id', id).select('id'), 'ignore')
   }
 
-  async createPayments(payments: PaymentInput[]) {
-    if (payments.length) check(await this.sb.from('payments').insert(payments))
+  async loginMember(memberId: Id, pin: string) {
+    return toPinResult(check(await this.sb.rpc('member_login', { p_member: memberId, p_pin: pin })))
   }
 
-  async deletePayments(ids: Id[]) {
-    if (ids.length) await this.expectAffected(await this.sb.from('payments').delete().in('id', ids).select('id'), 'ignore')
+  async changeMemberPin(memberId: Id, oldPin: string, newPin: string) {
+    return toPinResult(
+      check(await this.sb.rpc('member_change_pin', { p_member: memberId, p_old_pin: oldPin, p_new_pin: newPin })),
+    )
+  }
+
+  async createPayment(auth: MemberSession, p: PaymentInput) {
+    check(
+      await this.sb.rpc('create_payment', {
+        p_member: auth.memberId,
+        p_key: auth.key,
+        p_from: p.from_member_id,
+        p_amount: p.amount,
+        p_paid_at: p.paid_at,
+        p_session: p.session_id,
+        p_note: p.note,
+      }),
+    )
+  }
+
+  async deletePayments(auth: MemberSession, ids: Id[]) {
+    // 0 筆可能是已被刪掉，與其他 delete 一樣視為已達成；token 與憑證已由 RPC 檢查過
+    if (ids.length) check(await this.sb.rpc('delete_payments', { p_member: auth.memberId, p_key: auth.key, p_ids: ids }))
   }
 }

@@ -1,13 +1,14 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { repo } from '@/data'
-import { InvalidTokenError, type SessionPatch, type SportPatch } from '@/data/repository'
-import type { Expense, ExpenseShare, Id, LedgerData, Member, PaymentInput, SessionInput, SportInput } from '@/types'
+import { InvalidTokenError, MemberSessionError, type SessionPatch, type SportPatch } from '@/data/repository'
+import type { Expense, ExpenseShare, Id, LedgerData, Member, MemberSession, PaymentInput, SessionInput, SportInput } from '@/types'
 import { computeDues, sessionCoverage, type Transfer } from '@/lib/balance'
 import { attendeeIds, indexLedger, sortedMembers, sortedSessions, sortedSports, summarize } from '@/lib/ledger'
 import { formatMoney } from '@/lib/format'
 import { pickColor } from '@/lib/avatar'
 import { useAccessStore } from './access'
+import { currentSession, logout } from '@/composables/useWhoAmI'
 
 /** 一筆費用的完整輸入；participantIds 已依出席名單解析好 */
 export interface ExpenseRowInput {
@@ -120,13 +121,16 @@ export const useLedgerStore = defineStore('ledger', () => {
     return warnings
   }
 
-  async function createMembers(names: string[]) {
+  async function createMembers(names: string[], pin: string) {
     const existing = new Set(data.value.members.map((m) => m.name))
     const fresh = [...new Set(names.map((n) => n.trim()).filter(Boolean))].filter((n) => !existing.has(n))
     if (!fresh.length) return { added: 0, skipped: names.length }
     const base = data.value.members.length
     await mutate(() =>
-      repo.createMembers(fresh.map((name, i) => ({ name, color: pickColor(base + i), sort_order: base + i }))),
+      repo.createMembers(
+        fresh.map((name, i) => ({ name, color: pickColor(base + i), sort_order: base + i })),
+        pin,
+      ),
     )
     return { added: fresh.length, skipped: names.length - fresh.length }
   }
@@ -226,36 +230,52 @@ export const useLedgerStore = defineStore('ledger', () => {
   }
 
 
-  async function createPayment(input: PaymentInput) {
-    if (input.amount <= 0) throw new Error('金額必須大於 0')
-    if (input.from_member_id === input.to_member_id) throw new Error('付款人與收款人不能是同一人')
-    await mutate(() => repo.createPayments([input]))
+  /** 付款只有收款人本人能記，所以一律以登入的成員身分寫入；憑證失效時順便登出 */
+  async function asPayee<T>(payeeId: Id | null, fn: (auth: MemberSession) => Promise<T>): Promise<T> {
+    const auth = currentSession()
+    if (!auth) throw new Error('請先在右上角選擇你自己並輸入密碼')
+    if (payeeId && payeeId !== auth.memberId) throw new Error(`只有 ${nameOf(payeeId)} 本人可以記錄收到這筆錢`)
+    try {
+      return await mutate(() => fn(auth))
+    } catch (e) {
+      if (e instanceof MemberSessionError) logout()
+      throw e
+    }
   }
 
+  async function createPayment(input: PaymentInput) {
+    if (input.amount <= 0) throw new Error('金額必須大於 0')
+    if (input.from_member_id === currentSession()?.memberId) throw new Error('付款人與收款人不能是同一人')
+    await asPayee(null, (auth) => repo.createPayment(auth, input))
+  }
+
+  /** ids 必須都是收給登入者的付款 */
   async function deletePayments(ids: Id[]) {
-    await mutate(() => repo.deletePayments(ids))
+    await asPayee(null, (auth) => repo.deletePayments(auth, ids))
   }
 
   async function recordTransfer(t: Transfer) {
-    await createPayment({
-      from_member_id: t.from,
-      to_member_id: t.to,
-      amount: t.amount,
-      paid_at: new Date().toISOString(),
-      session_id: null,
-      note: '轉帳建議',
-    })
+    await asPayee(t.to, (auth) =>
+      repo.createPayment(auth, {
+        from_member_id: t.from,
+        amount: t.amount,
+        paid_at: new Date().toISOString(),
+        session_id: null,
+        note: '轉帳建議',
+      }),
+    )
   }
 
   async function payDirect(sessionId: Id, from: Id, to: Id, amount: number) {
-    await createPayment({
-      from_member_id: from,
-      to_member_id: to,
-      amount,
-      paid_at: new Date().toISOString(),
-      session_id: sessionId,
-      note: '',
-    })
+    await asPayee(to, (auth) =>
+      repo.createPayment(auth, {
+        from_member_id: from,
+        amount,
+        paid_at: new Date().toISOString(),
+        session_id: sessionId,
+        note: '',
+      }),
+    )
   }
 
 
