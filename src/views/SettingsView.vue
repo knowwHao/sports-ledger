@@ -5,6 +5,7 @@ import {
   ArchiveRestore,
   ArrowDown,
   ArrowUp,
+  ChevronRight,
   Copy,
   FlaskConical,
   Monitor,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   RotateCcw,
   SunMedium,
+  Users,
 } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import SportEditModal from '@/components/SportEditModal.vue'
@@ -126,9 +128,22 @@ const themes: { v: ThemePref; label: string; icon: typeof Monitor }[] = [
 
 <template>
   <div class="mx-auto max-w-2xl">
-    <PageHeader title="設定" />
+    <PageHeader title="成員與設定" />
 
     <div class="space-y-6">
+      <RouterLink to="/members" class="card flex items-center gap-4 p-5 transition hover:shadow-lift">
+        <span class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-ink-900 text-ball-400 dark:bg-ink-800">
+          <Users class="size-5" />
+        </span>
+        <div class="min-w-0 flex-1">
+          <h2 class="font-bold">成員</h2>
+          <p class="truncate text-sm text-ink-400 dark:text-ink-300">
+            {{ ledger.activeMembers.length }} 位球友 · 新增、改名、排序、封存
+          </p>
+        </div>
+        <ChevronRight class="size-5 shrink-0 text-ink-300" />
+      </RouterLink>
+
       <section class="card p-5">
         <h2 class="mb-3 font-bold">球隊名稱</h2>
         <form class="flex gap-2" @submit.prevent="saveName">

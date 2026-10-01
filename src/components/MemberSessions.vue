@@ -51,16 +51,16 @@ const groups = computed(() => {
             <SportBadge :sport="g.sport" />{{ sessionSubtitle(g.session) }}
           </p>
         </div>
-        <span v-if="g.settled" class="chip-done shrink-0">{{ g.settled === 'netted' ? '已抵銷' : '已結清' }}</span>
-        <span v-else class="chip-open shrink-0">未結清</span>
+        <span v-if="g.settled" class="chip-done shrink-0">{{ g.settled === 'netted' ? '已打平' : '已付清' }}</span>
+        <span v-else class="chip-open shrink-0">未付清</span>
       </button>
       <ul class="space-y-1 px-4 pb-2 text-sm">
         <li v-for="l in g.lines" :key="l.expense.id" class="flex justify-between gap-3 text-ink-500 dark:text-ink-300">
-          <span class="truncate">{{ l.expense.label }}<template v-if="l.isPayer">（自己墊付）</template></span>
+          <span class="truncate">{{ l.expense.label }}<template v-if="l.isPayer">（自己付的）</template></span>
           <span class="num">{{ formatMoney(l.share.amount_due) }}</span>
         </li>
         <li v-for="e in g.advanced" :key="`adv-${e.id}`" class="flex justify-between gap-3 text-ball-700 dark:text-ball-400">
-          <span class="truncate">墊付「{{ e.label }}」</span>
+          <span class="truncate">先付了「{{ e.label }}」</span>
           <span class="num">+{{ formatMoney(e.amount) }}</span>
         </li>
       </ul>
@@ -82,7 +82,7 @@ const groups = computed(() => {
             >
               <Check class="size-3.5" />標記已付
             </button>
-            <span v-else-if="!p.paid" class="chip-muted">{{ g.settled ? '已抵銷' : '未付' }}</span>
+            <span v-else-if="!p.paid" class="chip-muted">{{ g.settled ? '已打平' : '還沒付' }}</span>
           </template>
         </li>
       </ul>

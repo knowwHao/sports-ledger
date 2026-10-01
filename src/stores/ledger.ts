@@ -3,32 +3,19 @@ import { computed, ref } from 'vue'
 import { repo } from '@/data'
 import { InvalidTokenError, type SessionPatch, type SportPatch } from '@/data/repository'
 import type { Expense, ExpenseShare, Id, LedgerData, Member, PaymentInput, SessionInput, SportInput } from '@/types'
-import { computeDues, sessionCoverage, type DueSplit, type Transfer } from '@/lib/balance'
+import { computeDues, sessionCoverage, type Transfer } from '@/lib/balance'
 import { attendeeIds, indexLedger, sortedMembers, sortedSessions, sortedSports, summarize } from '@/lib/ledger'
 import { formatMoney } from '@/lib/format'
 import { pickColor } from '@/lib/avatar'
 import { useAccessStore } from './access'
 
-export interface ExpenseDraft {
+/** 一筆費用的完整輸入；participantIds 已依出席名單解析好 */
+export interface ExpenseRowInput {
   id?: Id
-  session_id: Id
   label: string
   amount: number
   payer_member_id: Id
   participantIds: Id[]
-}
-
-export interface NewExpenseRow {
-  label: string
-  amount: number
-  payer_member_id: Id
-}
-
-export interface AttendancePlan {
-  sessionId: Id
-  memberIds: Id[]
-  updates: { expense: Expense; split: DueSplit }[]
-  warnings: string[]
 }
 
 const EMPTY: LedgerData = {
@@ -108,20 +95,14 @@ export const useLedgerStore = defineStore('ledger', () => {
 
   const nameOf = (id: Id) => idx.value.member(id).name
 
-  /** 以假設的新分攤重算同場直接付款，找出會溢付或失去對應的付款 */
-  function coverageWarnings(sessionId: Id, replaced: Map<Id, ExpenseShare[]>, expenseOverride?: Expense): string[] {
-    const expenses = data.value.expenses.filter((e) => e.session_id === sessionId && e.id !== expenseOverride?.id)
-    if (expenseOverride) expenses.push(expenseOverride)
-    const shares = [
-      ...data.value.shares.filter((s) => !replaced.has(s.expense_id)),
-      ...[...replaced.values()].flat(),
-    ]
+  /** 以假設的新費用與分攤重算當場付款，找出會溢付或失去對應的付款 */
+  function coverageWarnings(sessionId: Id, expenses: Expense[], shares: ExpenseShare[]): string[] {
     const after = sessionCoverage({ expenses, shares, payments: data.value.payments }, sessionId)
     const warnings: string[] = []
     for (const p of after) {
       if (p.paid > p.due) {
         warnings.push(
-          `${nameOf(p.member_id)} 在本場已付給 ${nameOf(p.payer_id)} ${formatMoney(p.paid)}，超過新應付 ${formatMoney(p.due)}，多出的 ${formatMoney(p.paid - p.due)} 會計入他的餘額`,
+          `${nameOf(p.member_id)} 在這場已付給 ${nameOf(p.payer_id)} ${formatMoney(p.paid)}，超過新的應付 ${formatMoney(p.due)}，多出的 ${formatMoney(p.paid - p.due)} 會算進他的整體帳`,
         )
       }
     }
@@ -134,11 +115,10 @@ export const useLedgerStore = defineStore('ledger', () => {
     }
     for (const [key, amount] of orphan) {
       const [from, to] = key.split('|')
-      warnings.push(`${nameOf(from)} 在本場已付給 ${nameOf(to)} ${formatMoney(amount)}，但已不需分攤，這筆會計入他的餘額`)
+      warnings.push(`${nameOf(from)} 在這場已付給 ${nameOf(to)} ${formatMoney(amount)}，但已不用分這筆，這筆會算進他的整體帳`)
     }
     return warnings
   }
-
 
   async function createMembers(names: string[]) {
     const existing = new Set(data.value.members.map((m) => m.name))
@@ -189,13 +169,51 @@ export const useLedgerStore = defineStore('ledger', () => {
     return last ? attendeeIds(data.value, last.id) : []
   }
 
-  async function createSession(input: SessionInput, attendees: Id[], expenseRows: NewExpenseRow[] = []) {
+  async function createSession(input: SessionInput, attendees: Id[], rows: ExpenseRowInput[] = []) {
     return mutate(async () => {
       const session = await repo.createSession(input, attendees)
-      for (const row of expenseRows) {
-        await repo.saveExpense({ session_id: session.id, ...row }, computeDues(row.amount, attendees).shares)
+      for (const { label, amount, payer_member_id, participantIds } of rows) {
+        await repo.saveExpense(
+          { session_id: session.id, label, amount, payer_member_id },
+          computeDues(amount, participantIds).shares,
+        )
       }
       return session
+    })
+  }
+
+  /** 假設把這場的費用整批換成 rows，列出會受影響的當場付款 */
+  function sessionEditWarnings(sessionId: Id, rows: ExpenseRowInput[]): string[] {
+    const expenses: Expense[] = []
+    const shares: ExpenseShare[] = []
+    rows.forEach((r, i) => {
+      const id = r.id ?? `__draft${i}`
+      expenses.push({ id, session_id: sessionId, label: r.label, amount: r.amount, payer_member_id: r.payer_member_id, created_at: '' })
+      for (const s of computeDues(r.amount, r.participantIds).shares) shares.push({ ...s, expense_id: id })
+    })
+    return coverageWarnings(sessionId, expenses, shares)
+  }
+
+  /** 一次更新場次資訊、出席與整批費用；rows 沒列到的既有費用會被刪除 */
+  async function saveSessionEdit(id: Id, input: SessionInput, attendees: Id[], rows: ExpenseRowInput[]) {
+    const existing = data.value.expenses.filter((e) => e.session_id === id)
+    const keep = new Set(rows.map((r) => r.id).filter(Boolean))
+    await mutate(async () => {
+      await repo.updateSession(id, input)
+      if (!sameSet(attendeeIds(data.value, id), attendees)) await repo.setAttendance(id, attendees)
+      for (const e of existing) if (!keep.has(e.id)) await repo.deleteExpense(e.id)
+      for (const r of rows) {
+        const old = r.id ? existing.find((e) => e.id === r.id) : undefined
+        const unchanged =
+          old &&
+          old.label === r.label &&
+          old.amount === r.amount &&
+          old.payer_member_id === r.payer_member_id &&
+          sameSet(sharesOf(old.id).map((s) => s.member_id), r.participantIds)
+        if (unchanged) continue
+        const { label, amount, payer_member_id, participantIds } = r
+        await repo.saveExpense({ id: r.id, session_id: id, label, amount, payer_member_id }, computeDues(amount, participantIds).shares)
+      }
     })
   }
 
@@ -205,61 +223,6 @@ export const useLedgerStore = defineStore('ledger', () => {
 
   async function deleteSession(id: Id) {
     await mutate(() => repo.deleteSession(id))
-  }
-
-  /** 原本「全員分攤」的費用跟著出席名單走，其餘費用只移除缺席者 */
-  function planAttendance(sessionId: Id, memberIds: Id[]): AttendancePlan {
-    const before = attendeeIds(data.value, sessionId)
-    const updates: AttendancePlan['updates'] = []
-    const replaced = new Map<Id, ExpenseShare[]>()
-    for (const expense of data.value.expenses.filter((e) => e.session_id === sessionId)) {
-      const current = sharesOf(expense.id).map((s) => s.member_id)
-      let next = sameSet(current, before) ? [...memberIds] : current.filter((id) => memberIds.includes(id))
-      if (!next.length) next = [...memberIds]
-      if (!next.length || sameSet(next, current)) continue
-      const split = computeDues(expense.amount, next)
-      updates.push({ expense, split })
-      replaced.set(expense.id, split.shares.map((s) => ({ ...s, expense_id: expense.id })))
-    }
-    const warnings = updates.length ? coverageWarnings(sessionId, replaced) : []
-    return { sessionId, memberIds, updates, warnings }
-  }
-
-  async function applyAttendance(plan: AttendancePlan) {
-    await mutate(async () => {
-      await repo.setAttendance(plan.sessionId, plan.memberIds)
-      for (const { expense, split } of plan.updates) {
-        const { id, session_id, label, amount, payer_member_id } = expense
-        await repo.saveExpense({ id, session_id, label, amount, payer_member_id }, split.shares)
-      }
-    })
-  }
-
-
-  function previewExpense(draft: ExpenseDraft): DueSplit & { warnings: string[] } {
-    const split = computeDues(draft.amount, draft.participantIds)
-    const key = draft.id ?? '__draft__'
-    const override: Expense = {
-      id: key,
-      session_id: draft.session_id,
-      label: draft.label,
-      amount: draft.amount,
-      payer_member_id: draft.payer_member_id,
-      created_at: '',
-    }
-    const replaced = new Map([[key, split.shares.map((s) => ({ ...s, expense_id: key }))]])
-    return { ...split, warnings: coverageWarnings(draft.session_id, replaced, override) }
-  }
-
-  async function saveExpense(draft: ExpenseDraft) {
-    const split = computeDues(draft.amount, draft.participantIds)
-    const { id, session_id, label, amount, payer_member_id } = draft
-    await mutate(() => repo.saveExpense({ id, session_id, label, amount, payer_member_id }, split.shares))
-    return split
-  }
-
-  async function deleteExpense(id: Id) {
-    await mutate(() => repo.deleteExpense(id))
   }
 
 
@@ -280,7 +243,7 @@ export const useLedgerStore = defineStore('ledger', () => {
       amount: t.amount,
       paid_at: new Date().toISOString(),
       session_id: null,
-      note: '結算建議',
+      note: '轉帳建議',
     })
   }
 
@@ -325,11 +288,8 @@ export const useLedgerStore = defineStore('ledger', () => {
     createSession,
     updateSession,
     deleteSession,
-    planAttendance,
-    applyAttendance,
-    previewExpense,
-    saveExpense,
-    deleteExpense,
+    sessionEditWarnings,
+    saveSessionEdit,
     createPayment,
     deletePayments,
     recordTransfer,

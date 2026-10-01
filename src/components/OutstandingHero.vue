@@ -5,7 +5,7 @@ defineProps<{ total: number; caption: string; label?: string }>()
 </script>
 
 <template>
-  <section class="relative overflow-hidden rounded-[2rem] bg-ink-900 p-6 text-white shadow-lift sm:p-8 dark:bg-ink-800">
+  <section class="relative overflow-clip rounded-[2rem] bg-ink-900 p-6 text-white shadow-lift sm:p-8 dark:bg-ink-800">
     <svg class="pointer-events-none absolute inset-0 h-full w-full opacity-[0.09]" preserveAspectRatio="none" viewBox="0 0 400 200" aria-hidden="true">
       <g fill="none" stroke="#d4f53c" stroke-width="2">
         <rect x="20" y="20" width="360" height="160" rx="4" />

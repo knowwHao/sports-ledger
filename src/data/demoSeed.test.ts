@@ -30,7 +30,7 @@ describe('Demo 示範資料', () => {
     expect(db.payments.some((p) => p.session_id === null)).toBe(true)
   })
 
-  it('餘額加總為 0，且有結算建議與已結清／未結清場次', () => {
+  it('餘額加總為 0，且有轉帳建議與已結清／未結清場次', () => {
     expect([...summary.balances.values()].reduce((a, b) => a + b, 0)).toBe(0)
     expect(summary.transfers.length).toBeGreaterThan(0)
     expect(summary.settlements.size).toBeGreaterThan(0)

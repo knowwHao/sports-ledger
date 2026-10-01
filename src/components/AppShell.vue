@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { CalendarDays, LayoutDashboard, Settings, Users } from 'lucide-vue-next'
+import { CalendarDays, House, Settings, UsersRound } from 'lucide-vue-next'
 import BrandMark from './BrandMark.vue'
-import ThemeToggle from './ThemeToggle.vue'
 import WhoAmIPicker from './WhoAmIPicker.vue'
 import { useLedgerStore } from '@/stores/ledger'
 import { teamNameOr } from '@/lib/title'
@@ -12,11 +11,11 @@ const route = useRoute()
 const ledger = useLedgerStore()
 
 const nav = [
-  { to: '/', label: '總覽', icon: LayoutDashboard, match: (p: string) => p === '/' || p.startsWith('/members/') },
+  { to: '/', label: '首頁', icon: House, match: (p: string) => p === '/' },
   { to: '/sessions', label: '場次', icon: CalendarDays, match: (p: string) => p.startsWith('/sessions') },
-  { to: '/members', label: '成員', icon: Users, match: (p: string) => p === '/members' },
-  { to: '/settings', label: '設定', icon: Settings, match: (p: string) => p.startsWith('/settings') },
+  { to: '/team', label: '全隊', icon: UsersRound, match: (p: string) => p === '/team' || p.startsWith('/members/') },
 ]
+const settingsActive = computed(() => route.path === '/settings' || route.path === '/members')
 const teamName = computed(() => teamNameOr(ledger.data.team_name))
 </script>
 
@@ -49,15 +48,18 @@ const teamName = computed(() => teamNameOr(ledger.data.team_name))
           {{ item.label }}
         </RouterLink>
       </nav>
-      <div class="mt-auto flex items-center justify-between px-2 text-ink-300">
-        <span class="text-xs">主題</span>
-        <ThemeToggle class="!text-ink-200 hover:!bg-white/10" />
-      </div>
+      <RouterLink
+        to="/settings"
+        class="mt-auto flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition"
+        :class="settingsActive ? 'bg-white/10 text-white' : 'text-ink-300 hover:bg-white/5 hover:text-white'"
+      >
+        <Settings class="size-5" />成員與設定
+      </RouterLink>
     </aside>
 
     <div class="min-w-0 flex-1">
       <header
-        class="sticky top-0 z-30 flex items-center justify-between border-b border-ink-100/60 bg-paper/85 px-4 py-2.5 backdrop-blur-lg lg:hidden dark:border-ink-800/60 dark:bg-ink-950/85"
+        class="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-ink-100/60 bg-paper/85 px-4 py-2.5 backdrop-blur-lg lg:hidden dark:border-ink-800/60 dark:bg-ink-950/85"
       >
         <div class="flex min-w-0 items-center gap-2.5">
           <BrandMark :size="30" />
@@ -65,7 +67,15 @@ const teamName = computed(() => teamNameOr(ledger.data.team_name))
         </div>
         <div class="flex shrink-0 items-center gap-1">
           <WhoAmIPicker />
-          <ThemeToggle />
+          <RouterLink
+            to="/settings"
+            class="icon-btn"
+            :class="settingsActive && 'bg-ink-100 text-ink-900 dark:bg-ink-800 dark:text-ink-50'"
+            title="成員與設定"
+            aria-label="成員與設定"
+          >
+            <Settings class="size-5" />
+          </RouterLink>
         </div>
       </header>
 
@@ -77,7 +87,7 @@ const teamName = computed(() => teamNameOr(ledger.data.team_name))
     <nav
       class="safe-bottom fixed inset-x-0 bottom-0 z-40 border-t border-ink-100 bg-white/90 backdrop-blur-lg lg:hidden dark:border-ink-800 dark:bg-ink-900/90"
     >
-      <div class="mx-auto grid max-w-md grid-cols-4 px-2 pt-1.5 pb-1">
+      <div class="mx-auto grid max-w-md grid-cols-3 px-2 pt-1.5 pb-1">
         <RouterLink
           v-for="item in nav"
           :key="item.to"

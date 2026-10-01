@@ -70,15 +70,15 @@ const groups = computed(() => {
 
 const filters = [
   { v: 'all', label: '全部' },
-  { v: 'open', label: '未結清' },
-  { v: 'done', label: '已結清' },
+  { v: 'open', label: '未付清' },
+  { v: 'done', label: '已清' },
 ] as const
 </script>
 
 <template>
   <div>
     <PageHeader title="場次" :subtitle="ledger.loaded ? `共 ${ledger.sessions.length} 筆` : undefined">
-      <button type="button" class="btn-primary" @click="showForm = true"><Plus class="size-4" />新增場次</button>
+      <button type="button" class="btn-primary" @click="showForm = true"><Plus class="size-4" />記一場</button>
     </PageHeader>
 
     <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -108,9 +108,9 @@ const filters = [
       v-else-if="!ledger.sessions.length"
       :icon="CalendarPlus"
       title="還沒有任何場次"
-      description="新增一場球局，記下場地費與誰先墊付"
+      description="打完球記一筆，填總金額和誰付的就好"
     >
-      <button type="button" class="btn-primary" @click="showForm = true"><Plus class="size-4" />新增第一場</button>
+      <button type="button" class="btn-primary" @click="showForm = true"><Plus class="size-4" />記第一場</button>
     </EmptyState>
 
     <EmptyState v-else-if="!groups.length" :icon="SearchX" title="找不到符合的場次" description="換個關鍵字或篩選條件試試" />

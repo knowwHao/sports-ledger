@@ -1,22 +1,31 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { History, Plus, Trash2 } from 'lucide-vue-next'
+import { ChevronDown, History, Plus, Trash2 } from 'lucide-vue-next'
 import ModalSheet from './ModalSheet.vue'
 import MemberPicker from './MemberPicker.vue'
-import type { Session } from '@/types'
-import { useLedgerStore } from '@/stores/ledger'
-import { OTHER_SPORT } from '@/lib/ledger'
+import MemberAvatar from './MemberAvatar.vue'
+import type { Id, Session } from '@/types'
+import { useLedgerStore, type ExpenseRowInput } from '@/stores/ledger'
+import { useWhoAmI } from '@/composables/useWhoAmI'
+import { attendeeIds, OTHER_SPORT } from '@/lib/ledger'
+import { computeDues } from '@/lib/balance'
 import { formatMoney, MAX_AMOUNT, todayYmd } from '@/lib/format'
+import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
 
 const props = defineProps<{ open: boolean; session?: Session | null }>()
 const emit = defineEmits<{ close: []; saved: [id: string] }>()
 const ledger = useLedgerStore()
+const me = useWhoAmI()
 
 interface Row {
+  id?: Id
   label: string
   amount: number | null
-  payer: string
+  payer: Id
+  /** false＝分給全部出席者 */
+  custom: boolean
+  participants: Id[]
 }
 
 const form = reactive({
@@ -25,12 +34,16 @@ const form = reactive({
   title: '',
   location: '',
   note: '',
-  attendees: [] as string[],
+  attendees: [] as Id[],
+  /** false 時只用 rows[0]，畫面上就是「總金額＋誰付的」 */
+  split: false,
   rows: [] as Row[],
 })
+const showMore = ref(false)
 const saving = ref(false)
 const editing = computed(() => !!props.session)
 const isOther = computed(() => form.sportId === '')
+const sport = computed(() => ledger.idx.sport(form.sportId || null))
 const sportOptions = computed(() => {
   const list = ledger.activeSports.slice()
   const current = props.session?.sport_id
@@ -45,23 +58,66 @@ const locations = computed(() => {
   const list = ledger.sessions.filter((s) => s.sport_id === (form.sportId || null)).map((s) => s.location)
   return [...new Set(list.filter(Boolean))] as string[]
 })
+const attendeePool = computed(() => {
+  const ids = new Set(form.attendees)
+  return ledger.members.filter((m) => m.active || ids.has(m.id))
+})
+const attendeeMembers = computed(() => ledger.members.filter((m) => form.attendees.includes(m.id)))
+const main = computed(() => form.rows[0])
+const payerChips = computed(() => {
+  const ids = new Set([...form.attendees, main.value?.payer].filter(Boolean))
+  return ledger.members.filter((m) => ids.has(m.id))
+})
+const payerOptions = computed(() => {
+  const ids = new Set(form.rows.map((r) => r.payer))
+  return ledger.members.filter((m) => m.active || ids.has(m.id))
+})
 
-function defaultRows(sportId: string): Row[] {
-  if (!sportId) return []
-  return ledger.idx.sport(sportId).default_expenses.map((d) => ({ label: d.label, amount: d.amount ?? null, payer: '' }))
+/** 一筆總額時的費用名稱，例如羽球是「場地費＋羽球」 */
+function singleLabel(sportId: string): string {
+  const labels = sportId ? ledger.idx.sport(sportId).default_expenses.map((d) => d.label) : []
+  return labels.join('＋') || '費用'
+}
+
+function defaultPayer(attendees: Id[]): Id {
+  return me.value && attendees.includes(me.value) ? me.value : ''
+}
+
+function blankRow(label: string, amount: number | null = null, payer = ''): Row {
+  return { label, amount, payer, custom: false, participants: [] }
 }
 
 function pickSport(id: string) {
   form.sportId = id
   if (editing.value) return
-  form.rows = defaultRows(id)
   form.attendees = id ? [...lastAttendees.value] : ledger.activeMembers.map((m) => m.id)
+  const defaults = id ? ledger.idx.sport(id).default_expenses : []
+  const known = defaults.reduce((s, d) => s + (d.amount ?? 0), 0)
+  form.rows = [blankRow(singleLabel(id), known || null, defaultPayer(form.attendees))]
+  form.split = false
 }
 
+function loadSession(s: Session) {
+  form.sportId = s.sport_id ?? ''
+  form.attendees = attendeeIds(ledger.data, s.id)
+  const expenses = ledger.data.expenses
+    .filter((e) => e.session_id === s.id)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+  const all = new Set(form.attendees)
+  form.rows = expenses.map((e) => {
+    const participants = ledger.sharesOf(e.id).map((x) => x.member_id)
+    const custom = participants.length !== all.size || participants.some((p) => !all.has(p))
+    return { id: e.id, label: e.label, amount: e.amount, payer: e.payer_member_id, custom, participants }
+  })
+  if (!form.rows.length) form.rows = [blankRow(singleLabel(form.sportId), null, defaultPayer(form.attendees))]
+  form.split = form.rows.length > 1
+}
+
+// 直接開 ?new=1 時元件一掛載就是開啟狀態，帳本也可能還沒載入，所以兩者都就緒才初始化
 watch(
-  () => props.open,
-  (open) => {
-    if (!open) return
+  () => props.open && ledger.loaded,
+  (ready) => {
+    if (!ready) return
     const s = props.session
     Object.assign(form, {
       play_date: s?.play_date ?? todayYmd(),
@@ -69,27 +125,94 @@ watch(
       location: s?.location ?? '',
       note: s?.note ?? '',
     })
-    if (s) form.sportId = s.sport_id ?? ''
+    if (s) loadSession(s)
     else pickSport(ledger.activeSports[0]?.id ?? '')
+    showMore.value = !!(s && (s.title || s.location || s.note || form.rows.some((r) => r.custom)))
   },
+  { immediate: true },
 )
+
+function toggleCustom(row: Row) {
+  row.custom = !row.custom
+  if (row.custom && !row.participants.length) row.participants = [...form.attendees]
+}
+
+function splitRows() {
+  const first = form.rows[0]
+  const total = Math.round(first.amount ?? 0)
+  const defaults = isOther.value ? [] : sport.value.default_expenses
+  if (first.id || defaults.length < 2) {
+    form.rows.push(blankRow('', null, first.payer))
+  } else {
+    const rows = defaults.map((d) => blankRow(d.label, d.amount ?? null, first.payer))
+    const known = rows.reduce((s, r) => s + (r.amount ?? 0), 0)
+    const open = rows.find((r) => r.amount == null)
+    if (total > known && open) open.amount = total - known
+    else if (total && total !== known) {
+      rows[0].amount = total
+      for (const r of rows.slice(1)) r.amount = null
+    }
+    for (const r of rows) Object.assign(r, { custom: first.custom, participants: [...first.participants] })
+    form.rows = rows
+  }
+  form.split = true
+}
+
+function mergeRows() {
+  const filled = form.rows.filter((r) => (r.amount ?? 0) > 0)
+  const first = form.rows[0]
+  form.rows = [
+    {
+      ...first,
+      label: filled.map((r) => r.label.trim()).filter(Boolean).join('＋') || first.label || singleLabel(form.sportId),
+      amount: filled.reduce((s, r) => s + Math.round(r.amount ?? 0), 0) || null,
+      payer: filled[0]?.payer || first.payer,
+    },
+  ]
+  form.split = false
+}
+
+function participantsOf(r: Row): Id[] {
+  return r.custom ? r.participants.filter((id) => form.attendees.includes(id)) : [...form.attendees]
+}
 
 const filledRows = computed(() =>
-  form.rows.map((r) => ({ ...r, amount: Math.round(r.amount ?? 0) })).filter((r) => r.label.trim() && r.amount > 0),
+  form.rows
+    .map((r) => ({ row: r, amount: Math.round(r.amount ?? 0) }))
+    .filter((x) => x.amount > 0),
 )
-const rowsMissingPayer = computed(() => filledRows.value.some((r) => !r.payer))
-const rowsTooLarge = computed(() => filledRows.value.some((r) => r.amount > MAX_AMOUNT))
-const canSave = computed(() => {
-  if (isOther.value ? !form.title.trim() : !form.play_date) return false
-  if (editing.value) return true
-  if (rowsTooLarge.value) return false
-  if (filledRows.value.length && (!form.attendees.length || rowsMissingPayer.value)) return false
-  return true
+const total = computed(() => filledRows.value.reduce((s, x) => s + x.amount, 0))
+const problem = computed(() => {
+  if (isOther.value ? !form.title.trim() : !form.play_date) return isOther.value ? '請填寫標題' : '請選擇日期'
+  if (!filledRows.value.length) return ''
+  if (filledRows.value.some((x) => x.amount > MAX_AMOUNT)) return `單筆金額不可超過 ${formatMoney(MAX_AMOUNT)}`
+  if (!form.attendees.length) return '先勾選出席的人，費用才能分攤'
+  if (filledRows.value.some((x) => !x.row.payer)) return form.split ? '每筆費用都要選誰付的' : '請選擇誰付的'
+  if (form.split && filledRows.value.some((x) => !x.row.label.trim())) return '每筆費用都要有名稱'
+  if (filledRows.value.some((x) => !participantsOf(x.row).length)) return '分攤對象至少要有一位出席者'
+  return ''
 })
 
+const perHead = computed(() => {
+  if (form.split || !main.value) return null
+  const amount = Math.round(main.value.amount ?? 0)
+  const ids = participantsOf(main.value)
+  if (amount <= 0 || !ids.length) return null
+  return { ...computeDues(amount, ids), count: ids.length }
+})
+
+function rowInputs(): ExpenseRowInput[] {
+  return filledRows.value.map(({ row, amount }) => ({
+    id: row.id,
+    label: row.label.trim() || singleLabel(form.sportId),
+    amount,
+    payer_member_id: row.payer,
+    participantIds: participantsOf(row),
+  }))
+}
+
 async function submit() {
-  if (!canSave.value || saving.value) return
-  saving.value = true
+  if (problem.value || saving.value) return
   const input = {
     sport_id: form.sportId || null,
     play_date: isOther.value ? null : form.play_date,
@@ -97,19 +220,28 @@ async function submit() {
     location: isOther.value ? null : form.location.trim() || null,
     note: form.note.trim(),
   }
+  const rows = rowInputs()
+  if (props.session) {
+    const warnings = ledger.sessionEditWarnings(props.session.id, rows)
+    if (warnings.length) {
+      const ok = await confirmDialog({
+        title: '這次修改會影響已記的付款',
+        message: '分攤會重新計算，下列付款紀錄會保留：',
+        details: warnings,
+        confirmText: '仍要儲存',
+      })
+      if (!ok) return
+    }
+  }
+  saving.value = true
   try {
     if (props.session) {
-      await ledger.updateSession(props.session.id, input)
-      toast.success('已更新場次資訊')
+      await ledger.saveSessionEdit(props.session.id, input, form.attendees, rows)
+      toast.success('已儲存修改')
       emit('saved', props.session.id)
     } else {
-      const rows = filledRows.value.map((r) => ({
-        label: r.label.trim(),
-        amount: r.amount,
-        payer_member_id: r.payer,
-      }))
       const created = await ledger.createSession(input, form.attendees, rows)
-      toast.success(rows.length ? `已新增場次與 ${rows.length} 筆費用` : '已新增場次')
+      toast.success(rows.length ? `已記下這場，共 ${formatMoney(total.value)}` : '已新增場次')
       emit('saved', created.id)
     }
   } catch (e) {
@@ -121,7 +253,7 @@ async function submit() {
 </script>
 
 <template>
-  <ModalSheet :open="open" :title="editing ? '編輯場次資訊' : '新增場次'" wide @close="emit('close')">
+  <ModalSheet :open="open" :title="editing ? '編輯場次' : '記一場'" wide @close="emit('close')">
     <form id="session-form" class="space-y-5" @submit.prevent="submit">
       <div>
         <span class="label">運動</span>
@@ -133,6 +265,7 @@ async function submit() {
             class="flex items-center gap-1.5 rounded-2xl border-2 px-3.5 py-2 text-sm font-semibold transition"
             :class="form.sportId === s.id ? 'text-ink-950' : 'border-ink-100 text-ink-500 dark:border-ink-800 dark:text-ink-300'"
             :style="form.sportId === s.id ? { backgroundColor: s.color, borderColor: s.color } : {}"
+            :aria-pressed="form.sportId === s.id"
             @click="pickSport(s.id)"
           >
             <span aria-hidden="true">{{ s.emoji }}</span>{{ s.name }}
@@ -141,6 +274,7 @@ async function submit() {
             type="button"
             class="flex items-center gap-1.5 rounded-2xl border-2 px-3.5 py-2 text-sm font-semibold transition"
             :class="isOther ? 'border-ink-900 bg-ink-900 text-white dark:border-ink-600 dark:bg-ink-700' : 'border-ink-100 text-ink-500 dark:border-ink-800 dark:text-ink-300'"
+            :aria-pressed="isOther"
             @click="pickSport('')"
           >
             <span aria-hidden="true">{{ OTHER_SPORT.emoji }}</span>年費／雜費
@@ -148,101 +282,176 @@ async function submit() {
         </div>
       </div>
 
-      <div class="grid gap-4 sm:grid-cols-2">
-        <div v-if="!isOther">
-          <label class="label" for="sf-date">日期</label>
-          <input id="sf-date" v-model="form.play_date" type="date" class="input" required />
-        </div>
-        <div :class="isOther && 'sm:col-span-2'">
-          <label class="label" for="sf-title">{{ isOther ? '標題' : '標題（選填）' }}</label>
-          <input
-            id="sf-title"
-            v-model="form.title"
-            class="input"
-            maxlength="40"
-            :placeholder="isOther ? '例：2026 下半年年費' : '例：中秋友誼賽'"
-            :required="isOther"
-          />
-        </div>
-        <div v-if="!isOther" class="sm:col-span-2">
-          <label class="label" for="sf-loc">地點（選填）</label>
-          <input id="sf-loc" v-model="form.location" class="input" list="sf-locations" maxlength="40" placeholder="例：大安運動中心" />
-          <datalist id="sf-locations">
-            <option v-for="l in locations" :key="l" :value="l" />
-          </datalist>
-        </div>
-        <div class="sm:col-span-2">
-          <label class="label" for="sf-note">備註（選填）</label>
-          <textarea id="sf-note" v-model="form.note" class="input min-h-16 resize-y" maxlength="300" />
-        </div>
+      <div v-if="isOther">
+        <label class="label" for="sf-title">標題</label>
+        <input id="sf-title" v-model="form.title" class="input" maxlength="40" placeholder="例：2026 下半年年費" required />
+      </div>
+      <div v-else>
+        <label class="label" for="sf-date">日期</label>
+        <input id="sf-date" v-model="form.play_date" type="date" class="input" required />
       </div>
 
-      <template v-if="!editing">
-        <div>
-          <div class="mb-2 flex items-center justify-between gap-2">
-            <span class="label !mb-0">{{ isOther ? '參與成員' : '出席成員' }}（{{ form.attendees.length }}）</span>
-            <button
-              v-if="!isOther"
-              type="button"
-              class="btn-ghost !px-2.5 !py-1 text-xs"
-              :disabled="!lastAttendees.length"
-              @click="form.attendees = [...lastAttendees]"
-            >
-              <History class="size-3.5" />沿用上一場{{ lastAttendees.length ? `（${lastAttendees.length} 人）` : '' }}
-            </button>
-          </div>
-          <MemberPicker v-model="form.attendees" :members="ledger.activeMembers" />
+      <div>
+        <div class="mb-2 flex items-center justify-between gap-2">
+          <span class="label !mb-0">{{ isOther ? '要分攤的人' : '出席的人' }}（{{ form.attendees.length }}）</span>
+          <button
+            v-if="!isOther && !editing"
+            type="button"
+            class="btn-ghost !px-2.5 !py-1 text-xs"
+            :disabled="!lastAttendees.length"
+            @click="form.attendees = [...lastAttendees]"
+          >
+            <History class="size-3.5" />同上一場{{ lastAttendees.length ? `（${lastAttendees.length} 人）` : '' }}
+          </button>
         </div>
+        <MemberPicker v-model="form.attendees" :members="attendeePool" />
+      </div>
 
+      <template v-if="!form.split && main">
         <div>
-          <span class="label">費用（金額留空的列不會建立）</span>
-          <div class="space-y-2">
-            <div v-for="(row, i) in form.rows" :key="i" class="grid grid-cols-[1fr_6.5rem_auto] gap-2 sm:grid-cols-[1fr_7rem_9rem_auto]">
-              <input v-model="row.label" class="input" placeholder="項目" aria-label="費用項目" maxlength="30" />
-              <input
-                v-model.number="row.amount"
-                class="input num"
-                type="number"
-                inputmode="numeric"
-                min="0"
-                :max="MAX_AMOUNT"
-                step="1"
-                placeholder="金額"
-                aria-label="金額"
-              />
-              <select
-                v-model="row.payer"
-                class="input col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto"
-                aria-label="墊付者"
-                :class="!row.payer && (row.amount ?? 0) > 0 && 'border-amber-400'"
-              >
-                <option value="" disabled>誰墊付？</option>
-                <option v-for="m in ledger.activeMembers" :key="m.id" :value="m.id">{{ m.name }}</option>
-              </select>
-              <button type="button" class="icon-btn self-center" aria-label="移除這列" @click="form.rows.splice(i, 1)">
-                <Trash2 class="size-4" />
-              </button>
-            </div>
-            <button type="button" class="btn-ghost !px-3 text-xs" @click="form.rows.push({ label: '', amount: null, payer: '' })">
-              <Plus class="size-3.5" />新增一列
+          <label class="label" for="sf-total">總金額</label>
+          <input
+            id="sf-total"
+            v-model.number="main.amount"
+            class="input num text-lg font-bold"
+            type="number"
+            inputmode="numeric"
+            min="0"
+            :max="MAX_AMOUNT"
+            step="1"
+            placeholder="例：1200"
+          />
+          <p v-if="perHead" class="mt-1.5 text-xs text-ink-400 dark:text-ink-300">
+            {{ perHead.count }} 人平分，每人
+            <span class="num font-bold text-ink-700 dark:text-ink-100">{{ formatMoney(perHead.perHead) }}</span>
+            <template v-if="perHead.surplus > 0">（除不盡進位，付錢的人多收 {{ formatMoney(perHead.surplus) }}）</template>
+          </p>
+        </div>
+        <div>
+          <span class="label">誰付的？</span>
+          <div v-if="payerChips.length" class="flex flex-wrap gap-2">
+            <button
+              v-for="m in payerChips"
+              :key="m.id"
+              type="button"
+              :aria-pressed="main.payer === m.id"
+              class="flex items-center gap-1.5 rounded-full border py-1 pr-3 pl-1 text-sm font-semibold transition"
+              :class="
+                main.payer === m.id
+                  ? 'border-ink-900 bg-ink-900 text-white dark:border-ball-400 dark:bg-ball-400 dark:text-ink-950'
+                  : 'border-ink-200 text-ink-500 dark:border-ink-700 dark:text-ink-300'
+              "
+              @click="main.payer = m.id"
+            >
+              <MemberAvatar :name="m.name" :color="m.color" size="xs" />{{ m.name }}
             </button>
           </div>
-          <p v-if="rowsTooLarge" class="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-400">
-            單筆金額不可超過 {{ formatMoney(MAX_AMOUNT) }}
-          </p>
-          <p v-else-if="filledRows.length && !form.attendees.length" class="mt-2 text-xs font-semibold text-amber-600">
-            要先選擇出席成員，費用才能分攤
-          </p>
-          <p v-else-if="rowsMissingPayer" class="mt-2 text-xs font-semibold text-amber-600">請為每筆費用選擇墊付者</p>
-          <p v-else class="mt-2 text-xs text-ink-400">費用會平均分給所有出席成員，建立後可在場次頁調整分攤對象</p>
+          <p v-else class="text-sm text-ink-400">先勾選{{ isOther ? '要分攤的人' : '出席的人' }}</p>
         </div>
       </template>
+
+      <div v-else class="space-y-3">
+        <div class="flex items-baseline justify-between">
+          <span class="label !mb-0">費用明細</span>
+          <span class="text-sm text-ink-400">合計 <span class="num font-bold text-ink-700 dark:text-ink-100">{{ formatMoney(total) }}</span></span>
+        </div>
+        <div v-for="(row, i) in form.rows" :key="row.id ?? `n${i}`" class="rounded-2xl border border-ink-100 p-3 dark:border-ink-800">
+          <div class="grid grid-cols-[1fr_6.5rem_auto] gap-2">
+            <input v-model="row.label" class="input" placeholder="項目，例：場地費" aria-label="費用項目" maxlength="30" />
+            <input
+              v-model.number="row.amount"
+              class="input num"
+              type="number"
+              inputmode="numeric"
+              min="0"
+              :max="MAX_AMOUNT"
+              step="1"
+              placeholder="金額"
+              aria-label="金額"
+            />
+            <button type="button" class="icon-btn self-center" aria-label="移除這筆" :disabled="form.rows.length < 2" @click="form.rows.splice(i, 1)">
+              <Trash2 class="size-4" />
+            </button>
+            <select
+              v-model="row.payer"
+              class="input col-span-3"
+              aria-label="誰付的"
+              :class="!row.payer && (row.amount ?? 0) > 0 && 'border-amber-400'"
+            >
+              <option value="" disabled>誰付的？</option>
+              <option v-for="m in payerOptions" :key="m.id" :value="m.id">{{ m.name }} 付的</option>
+            </select>
+          </div>
+          <button type="button" class="mt-2 text-xs font-semibold text-ink-400 hover:text-ink-700 dark:hover:text-ink-100" @click="toggleCustom(row)">
+            {{ row.custom ? `只分給 ${participantsOf(row).length} 人（改回全部出席者）` : '分給全部出席者（改成只分給部分人）' }}
+          </button>
+          <MemberPicker v-if="row.custom" v-model="row.participants" class="mt-2" :members="attendeeMembers" />
+        </div>
+        <button type="button" class="btn-ghost !px-3 text-xs" @click="form.rows.push(blankRow('', null, form.rows[0]?.payer ?? ''))">
+          <Plus class="size-3.5" />再加一筆
+        </button>
+      </div>
+
+      <div class="border-t border-ink-100 pt-4 dark:border-ink-800">
+        <button
+          type="button"
+          class="flex w-full items-center justify-between text-sm font-semibold text-ink-500 dark:text-ink-300"
+          :aria-expanded="showMore"
+          @click="showMore = !showMore"
+        >
+          更多選項
+          <ChevronDown class="size-4 transition" :class="showMore && 'rotate-180'" />
+        </button>
+        <div v-if="showMore" class="mt-4 space-y-4">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div v-if="!isOther">
+              <label class="label" for="sf-title2">標題</label>
+              <input id="sf-title2" v-model="form.title" class="input" maxlength="40" placeholder="例：中秋友誼賽" />
+            </div>
+            <div v-if="!isOther">
+              <label class="label" for="sf-loc">地點</label>
+              <input id="sf-loc" v-model="form.location" class="input" list="sf-locations" maxlength="40" placeholder="例：大安運動中心" />
+              <datalist id="sf-locations">
+                <option v-for="l in locations" :key="l" :value="l" />
+              </datalist>
+            </div>
+            <div class="sm:col-span-2">
+              <label class="label" for="sf-note">備註</label>
+              <textarea id="sf-note" v-model="form.note" class="input min-h-16 resize-y" maxlength="300" />
+            </div>
+          </div>
+
+          <div v-if="!form.split && main" class="space-y-2">
+            <span class="label !mb-0">分給誰</span>
+            <button type="button" class="btn-outline !px-3 !py-1.5 text-xs" @click="toggleCustom(main)">
+              {{ main.custom ? '改回分給全部出席者' : '只分給部分人' }}
+            </button>
+            <MemberPicker v-if="main.custom" v-model="main.participants" :members="attendeeMembers" />
+          </div>
+
+          <div class="space-y-1.5">
+            <span class="label !mb-0">費用拆分</span>
+            <button v-if="!form.split" type="button" class="btn-outline !px-3 !py-1.5 text-xs" @click="splitRows">
+              拆成多筆費用{{ !isOther && sport.default_expenses.length > 1 ? `（${sport.default_expenses.map((d) => d.label).join('、')}）` : '' }}
+            </button>
+            <button v-else type="button" class="btn-outline !px-3 !py-1.5 text-xs" @click="mergeRows">合併成一筆總金額</button>
+            <p class="text-xs text-ink-400">
+              {{ form.split ? '合併後金額相加，以第一筆的付款人為準' : '不同人付不同項目、或某項只分給部分人時才需要拆開' }}
+            </p>
+          </div>
+        </div>
+      </div>
     </form>
     <template #footer>
-      <button type="button" class="btn-outline flex-1" @click="emit('close')">取消</button>
-      <button type="submit" form="session-form" class="btn-primary flex-1" :disabled="!canSave || saving">
-        {{ saving ? '儲存中…' : editing ? '儲存' : '建立場次' }}
-      </button>
+      <div class="flex w-full flex-col gap-2">
+        <p v-if="problem" class="text-xs font-semibold text-amber-600">{{ problem }}</p>
+        <div class="flex gap-2">
+          <button type="button" class="btn-outline flex-1" @click="emit('close')">取消</button>
+          <button type="submit" form="session-form" class="btn-primary flex-1" :disabled="!!problem || saving">
+            {{ saving ? '儲存中…' : editing ? '儲存' : '記下這場' }}
+          </button>
+        </div>
+      </div>
     </template>
   </ModalSheet>
 </template>

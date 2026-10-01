@@ -35,7 +35,7 @@ const keyOf = (t: Transfer) => `${t.from}>${t.to}`
           :disabled="busy === keyOf(t)"
           @click="emit('record', t)"
         >
-          <Check class="size-3.5" />記錄已轉帳
+          <Check class="size-3.5" />已轉帳
         </button>
       </div>
     </li>

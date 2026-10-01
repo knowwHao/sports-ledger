@@ -47,10 +47,11 @@ const max = computed(() => Math.max(1, ...rows.value.map((r) => Math.abs(r.balan
               <span v-if="r.member.id === highlightId" class="chip-done ml-1 !py-0 align-middle">我</span>
             </p>
             <p
-              class="num shrink-0 font-bold"
+              class="shrink-0 text-sm font-bold"
               :class="r.balance < 0 ? 'text-rose-600 dark:text-rose-400' : r.balance > 0 ? 'text-ball-700 dark:text-ball-400' : 'text-ink-300'"
             >
-              {{ r.balance > 0 ? '+' : r.balance < 0 ? '−' : '' }}{{ formatMoney(Math.abs(r.balance)) }}
+              <template v-if="r.balance === 0">兩清</template>
+              <template v-else>{{ r.balance < 0 ? '要付' : '要收' }} <span class="num text-base">{{ formatMoney(Math.abs(r.balance)) }}</span></template>
             </p>
           </div>
           <div class="mt-1.5 flex h-1.5 items-center">

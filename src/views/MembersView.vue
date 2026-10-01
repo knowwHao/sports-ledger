@@ -54,7 +54,7 @@ async function setActive(m: Member, value: boolean) {
     const ok = await confirmDialog({
       title: `封存 ${m.name}？`,
       message: '封存後不會出現在新場次的出席選項，歷史紀錄與欠款都會保留，可隨時恢復。',
-      details: bal !== 0 ? [`${m.name} 目前淨餘額 ${bal > 0 ? '+' : '−'}${formatMoney(Math.abs(bal))}，仍會列在結算建議中`] : undefined,
+      details: bal !== 0 ? [`${m.name} 目前${bal > 0 ? '要收' : '要付'} ${formatMoney(Math.abs(bal))}，仍會列在轉帳建議中`] : undefined,
       confirmText: '封存',
     })
     if (!ok) return
@@ -70,7 +70,7 @@ async function setActive(m: Member, value: boolean) {
 
 <template>
   <div>
-    <PageHeader title="成員" :subtitle="ledger.loaded ? `${active.length} 位在籍${archived.length ? `、${archived.length} 位已封存` : ''}` : undefined" />
+    <PageHeader title="成員" back="/settings" :subtitle="ledger.loaded ? `${active.length} 位在籍${archived.length ? `、${archived.length} 位已封存` : ''}` : undefined" />
 
     <form class="card mb-6 p-5" @submit.prevent="add">
       <label class="label" for="new-members">新增成員</label>
@@ -105,7 +105,7 @@ async function setActive(m: Member, value: boolean) {
               <p class="text-xs text-ink-400 dark:text-ink-300">
                 參加 {{ sessionCount(m.id) }} 場 ·
                 <span :class="balanceOf(m.id) < 0 ? 'text-rose-500' : balanceOf(m.id) > 0 ? 'text-ball-700 dark:text-ball-400' : ''">
-                  餘額 {{ balanceOf(m.id) > 0 ? '+' : balanceOf(m.id) < 0 ? '−' : '' }}{{ formatMoney(Math.abs(balanceOf(m.id))) }}
+                  {{ balanceOf(m.id) > 0 ? '要收' : balanceOf(m.id) < 0 ? '要付' : '兩清' }}<template v-if="balanceOf(m.id)"> {{ formatMoney(Math.abs(balanceOf(m.id))) }}</template>
                 </span>
               </p>
             </div>

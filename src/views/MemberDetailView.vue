@@ -7,6 +7,7 @@ import MemberAvatar from '@/components/MemberAvatar.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import SkeletonList from '@/components/SkeletonList.vue'
 import TransferList from '@/components/TransferList.vue'
+import TransferModal from '@/components/TransferModal.vue'
 import PaymentList from '@/components/PaymentList.vue'
 import MemberSessions from '@/components/MemberSessions.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
@@ -32,19 +33,8 @@ const lines = computed(() => memberLines(ledger.data, memberId.value))
 const totalDue = computed(() => lines.value.reduce((s, l) => s + l.share.amount_due, 0))
 const advanced = computed(() => memberAdvanced(ledger.data, memberId.value))
 const busy = ref<string | null>(null)
+const confirming = ref<Transfer | null>(null)
 const sessionOf = (id: string) => ledger.idx.sessions.get(id)
-
-async function record(t: Transfer) {
-  busy.value = `${t.from}>${t.to}`
-  try {
-    await ledger.recordTransfer(t)
-    toast.success('已記錄轉帳')
-  } catch (e) {
-    toast.error(`記錄失敗：${errorMessage(e)}`)
-  } finally {
-    busy.value = null
-  }
-}
 
 async function pay(p: PairCoverage, sessionId: string) {
   busy.value = `${sessionId}:${p.payer_id}`
@@ -80,28 +70,28 @@ async function removePayment(p: Payment) {
     <SkeletonList v-if="!ledger.loaded" />
 
     <EmptyState v-else-if="!member" :icon="SearchX" title="找不到這位成員">
-      <RouterLink to="/" class="btn-primary">回總覽</RouterLink>
+      <RouterLink to="/team" class="btn-primary">回全隊</RouterLink>
     </EmptyState>
 
     <template v-else>
-      <PageHeader :title="member.name" back="/" :subtitle="member.active ? undefined : '已封存'" />
+      <PageHeader :title="member.name" back="/team" :subtitle="member.active ? undefined : '已封存'" />
 
       <section class="card mb-6 flex flex-wrap items-center gap-5 p-5 sm:p-6">
         <MemberAvatar :name="member.name" :color="member.color" size="lg" :muted="!member.active" />
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-semibold text-ink-400">淨餘額</p>
+          <p class="text-sm font-semibold text-ink-400">{{ balance < 0 ? '要付' : balance > 0 ? '要收' : '目前' }}</p>
           <p
             class="num text-4xl font-black tracking-tight"
             :class="balance < 0 ? 'text-rose-600 dark:text-rose-400' : balance > 0 ? 'text-ball-700 dark:text-ball-400' : ''"
           >
-            {{ balance > 0 ? '+' : balance < 0 ? '−' : '' }}{{ formatMoney(Math.abs(balance)) }}
+            {{ balance === 0 ? '兩清' : formatMoney(Math.abs(balance)) }}
           </p>
           <p class="mt-1 text-sm text-ink-400 dark:text-ink-300">
-            {{ balance < 0 ? '還需要付錢給別人' : balance > 0 ? '別人還欠他錢' : '已經全部結清' }}
+            {{ balance < 0 ? '還要轉錢給別人' : balance > 0 ? '別人還要轉錢給他' : '沒有待結清的帳' }}
           </p>
         </div>
         <dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-          <dt class="text-ink-400">累計墊付</dt>
+          <dt class="text-ink-400">累計先付</dt>
           <dd class="num text-right font-semibold">{{ formatMoney(advanced) }}</dd>
           <dt class="text-ink-400">累計應付</dt>
           <dd class="num text-right font-semibold">{{ formatMoney(totalDue) }}</dd>
@@ -127,9 +117,9 @@ async function removePayment(p: Payment) {
         </div>
         <div class="space-y-6 lg:col-span-2">
           <section v-if="transfers.length">
-            <h2 class="section-title mb-3">相關的結算建議</h2>
+            <h2 class="section-title mb-3">他的轉帳建議</h2>
             <div class="card overflow-hidden">
-              <TransferList :transfers="transfers" :member="ledger.idx.member" :busy="busy" actionable @record="record" />
+              <TransferList :transfers="transfers" :member="ledger.idx.member" actionable @record="(t) => (confirming = t)" />
             </div>
           </section>
           <section>
@@ -148,6 +138,7 @@ async function removePayment(p: Payment) {
           </section>
         </div>
       </div>
+      <TransferModal :transfer="confirming" @close="confirming = null" />
     </template>
   </div>
 </template>

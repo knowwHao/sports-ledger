@@ -48,10 +48,10 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 
 ## 業務規則指標（改之前先讀）
 
-- 每人應付、零頭由墊付者多收 → README「分攤」、`computeDues`
-- 淨餘額公式（全隊加總必為 0）→ README「淨餘額」、`netBalances`
-- 最少轉帳（貪婪法）→ README「結算建議（最少轉帳）」、`simplifyDebts`
-- 結清判定（尚無費用／同場付清／事後抵銷）→ README「場次狀態」、`sessionSettlements`／`sessionStatuses`
+- 每人應付、零頭由墊付者（付錢的人）多收 → README「分攤」、`computeDues`
+- 要付／要收（淨額）公式（全隊加總必為 0）→ README「要付／要收（淨額）」、`netBalances`
+- 最少轉帳（貪婪法）→ README「轉帳建議（最少轉帳）」、`simplifyDebts`
+- 結清判定（還沒記費用／當場付清／事後打平）→ README「場次狀態」、`sessionSettlements`／`sessionStatuses`
 - 運動預設費用列 → `supabase/schema.sql` 的 sports 種子資料與 `src/data/demoSeed.ts`
 - 改了上述任一規則，README 對應段落要同步更新
 
