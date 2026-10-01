@@ -21,7 +21,8 @@ export default defineConfig(({ mode }) => {
       vue(),
       tailwindcss(),
       VitePWA({
-        registerType: 'autoUpdate',
+        // 不自動接管：正在填表單時重新整理會丟資料，改由 UpdatePrompt 讓使用者自己按更新
+        registerType: 'prompt',
         includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
         manifest: {
           name: '球友記帳',

@@ -111,6 +111,7 @@ npm run build      # 型別檢查 + 打包到 dist/
 
    網址裡的帳號一律寫小寫是**依 GitHub 文件推斷**，尚未實測：[Creating a GitHub Pages site](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site) 要求帳號含大寫時，使用者站台的 repo 名稱要改成小寫的 `<帳號>.github.io`；網域名稱本身也不分大小寫。第一次部署成功後，以 **Settings → Pages** 顯示的網址為準。
 5. 路由使用 hash 模式（網址長得像 `.../#/sessions`），GitHub Pages 重新整理深層頁面也不會 404。
+6. 網站是 PWA，會用 service worker 快取整個網站。部署新版後，使用者下次打開網站（或把 App 從背景切回前景）時會在背景下載新版，畫面底部跳出「有新版本可以用了」，按「立即更新」就會重新載入成新版；按 ✕ 會先繼續用舊版，下次打開會再提示。正在填表單時不會自動重新整理，避免填到一半的內容消失。
 
 未來有需要時，可以改部署到 Cloudflare Workers（已有實驗分支 `cloudflare-attempt`，尚未合併）。
 
