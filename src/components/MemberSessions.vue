@@ -52,7 +52,7 @@ const groups = computed(() => {
             <SportBadge :sport="g.sport" />{{ sessionSubtitle(g.session) }}
           </p>
         </div>
-        <span v-if="g.settled" class="chip-done shrink-0">{{ g.settled === 'netted' ? '已打平' : '已付清' }}</span>
+        <span v-if="g.settled" class="chip-done shrink-0">已付清</span>
         <span v-else class="chip-open shrink-0">未付清</span>
       </button>
       <ul class="space-y-1 px-4 pb-2 text-sm">
@@ -71,8 +71,7 @@ const groups = computed(() => {
             付給 <span class="font-semibold">{{ idx.member(p.payer_id).name }}</span>
             <span class="num ml-1 font-bold">{{ formatMoney(p.due) }}</span>
           </p>
-          <span v-if="p.paid >= p.due" class="chip-done"><Check class="size-3" />已付</span>
-          <span v-else-if="g.netted" class="chip-done"><Check class="size-3" />已打平</span>
+          <span v-if="p.paid >= p.due || g.netted" class="chip-done"><Check class="size-3" />已付</span>
           <template v-else>
             <span v-if="p.paid > 0" class="chip-open num">已付 {{ formatMoney(p.paid) }}</span>
             <button
