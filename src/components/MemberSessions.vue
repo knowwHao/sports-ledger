@@ -11,6 +11,8 @@ const props = defineProps<{
   data: LedgerData
   memberId: Id
   settlements: Map<Id, SettleReason>
+  /** 各場已個人事後打平的欠款者 */
+  netted: Map<Id, Set<Id>>
   /** 只有收款人本人能標記已付 */
   canPay?: (p: PairCoverage) => boolean
   busy?: string | null
@@ -35,6 +37,7 @@ const groups = computed(() => {
       pairs: sessionCoverage(props.data, session.id).filter((p) => p.member_id === props.memberId),
       advanced: advancedAll.filter((e) => e.session_id === session.id),
       settled: props.settlements.get(session.id),
+      netted: !!props.netted.get(session.id)?.has(props.memberId),
     }))
 })
 </script>
@@ -69,6 +72,7 @@ const groups = computed(() => {
             <span class="num ml-1 font-bold">{{ formatMoney(p.due) }}</span>
           </p>
           <span v-if="p.paid >= p.due" class="chip-done"><Check class="size-3" />已付</span>
+          <span v-else-if="g.netted" class="chip-done"><Check class="size-3" />已打平</span>
           <template v-else>
             <span v-if="p.paid > 0" class="chip-open num">已付 {{ formatMoney(p.paid) }}</span>
             <button
@@ -80,7 +84,7 @@ const groups = computed(() => {
             >
               <Check class="size-3.5" />標記已付
             </button>
-            <span v-else-if="!p.paid" class="chip-muted">{{ g.settled ? '已打平' : '還沒付' }}</span>
+            <span v-else-if="!p.paid" class="chip-muted">還沒付</span>
           </template>
         </li>
       </ul>

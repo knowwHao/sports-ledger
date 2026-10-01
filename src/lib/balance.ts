@@ -144,20 +144,10 @@ export type SessionStatus = SettleReason | 'open' | 'none'
 export type StatusInput = Pick<LedgerData, 'members' | 'sessions' | 'expenses' | 'shares' | 'payments'>
 
 /**
- * 場次結清判定，有費用且符合任一即結清：
- * (1) 每位非墊付者的應付都有足額的同場直接付款
- * (2) 依時間重播所有場次與付款，該場之後曾出現全員淨餘額皆為 0 的時間點
- * 回傳已結清場次與原因；沒有費用的場次一律不在 Map 內
+ * 個人事後打平：依時間重播所有場次與付款，某人在某場有欠款，之後只要有任一時間點他的淨餘額 ≥ 0（不再欠任何人），
+ * 他在該場以及之前場次的欠款都算已打平；回傳各場已打平的欠款者
  */
-export function sessionSettlements(data: StatusInput): Map<Id, SettleReason> {
-  const result = new Map<Id, SettleReason>()
-  const withExpense = new Set(data.expenses.map((e) => e.session_id))
-
-  for (const s of data.sessions) {
-    if (!withExpense.has(s.id)) continue
-    if (sessionCoverage(data, s.id).every((p) => p.paid >= p.due)) result.set(s.id, 'direct')
-  }
-
+export function nettedMembers(data: StatusInput): Map<Id, Set<Id>> {
   type Event = { t: number; order: number; session?: Session; payment?: Payment }
   const events: Event[] = [
     ...data.sessions.map((session) => ({ t: sessionTime(session), order: 0, session })),
@@ -171,19 +161,52 @@ export function sessionSettlements(data: StatusInput): Map<Id, SettleReason> {
   for (const e of data.expenses) expensesBySession.set(e.session_id, [...(expensesBySession.get(e.session_id) ?? []), e])
 
   const bal = new Map<Id, number>(data.members.map((m) => [m.id, 0]))
-  const seen: Id[] = []
-  let lastZero = 0
+  // 每人還沒打平的欠款場次
+  const pending = new Map<Id, Id[]>()
+  const result = new Map<Id, Set<Id>>()
   for (const ev of events) {
     if (ev.session) {
-      for (const e of expensesBySession.get(ev.session.id) ?? []) applyExpense(bal, e, byExpense.get(e.id) ?? [])
-      seen.push(ev.session.id)
+      for (const e of expensesBySession.get(ev.session.id) ?? []) {
+        const shares = byExpense.get(e.id) ?? []
+        applyExpense(bal, e, shares)
+        for (const s of shares) {
+          if (s.member_id === e.payer_member_id || s.amount_due <= 0) continue
+          const list = pending.get(s.member_id) ?? []
+          if (!list.includes(ev.session.id)) list.push(ev.session.id)
+          pending.set(s.member_id, list)
+        }
+      }
     } else if (ev.payment) {
       applyPayment(bal, ev.payment)
     }
-    if ([...bal.values()].every((v) => v === 0)) lastZero = seen.length
+    for (const [memberId, sessionIds] of pending) {
+      if ((bal.get(memberId) ?? 0) < 0) continue
+      for (const id of sessionIds) result.set(id, (result.get(id) ?? new Set()).add(memberId))
+      pending.delete(memberId)
+    }
   }
-  for (const id of seen.slice(0, lastZero)) if (withExpense.has(id) && !result.has(id)) result.set(id, 'netted')
+  return result
+}
 
+/**
+ * 場次結清判定，有費用且符合任一即結清：
+ * (1) 每位非墊付者的應付都有足額的同場直接付款
+ * (2) 每位非墊付者不是付清就是個人事後打平（見 nettedMembers）；全隊歸零時人人都打平，涵蓋全隊抵銷的情況
+ * 回傳已結清場次與原因；沒有費用的場次一律不在 Map 內
+ */
+export function sessionSettlements(
+  data: StatusInput,
+  netted: Map<Id, Set<Id>> = nettedMembers(data),
+): Map<Id, SettleReason> {
+  const result = new Map<Id, SettleReason>()
+  const withExpense = new Set(data.expenses.map((e) => e.session_id))
+
+  for (const s of data.sessions) {
+    if (!withExpense.has(s.id)) continue
+    const pairs = sessionCoverage(data, s.id)
+    if (pairs.every((p) => p.paid >= p.due)) result.set(s.id, 'direct')
+    else if (pairs.every((p) => p.paid >= p.due || netted.get(s.id)?.has(p.member_id))) result.set(s.id, 'netted')
+  }
   return result
 }
 

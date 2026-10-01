@@ -38,19 +38,29 @@ const expenses = computed(() =>
 )
 const totals = computed(() => sessionTotals(ledger.data, sessionId.value))
 const coverage = computed(() => sessionCoverage(ledger.data, sessionId.value))
-const remaining = computed(() => coverage.value.reduce((s, p) => s + Math.max(0, p.due - p.paid), 0))
-const settledBy = computed(() => ledger.summary.settlements.get(sessionId.value))
+/** 這場之後已經不欠任何人的成員，這場不用再另外付 */
+const nettedHere = computed(() => ledger.summary.netted.get(sessionId.value) ?? new Set<Id>())
+const remaining = computed(() =>
+  coverage.value.reduce((s, p) => s + (nettedHere.value.has(p.member_id) ? 0 : Math.max(0, p.due - p.paid)), 0),
+)
 
 interface MemberRow {
   member: Member
   due: number
   paid: number
+  netted: boolean
   pairs: PairCoverage[]
 }
 const rows = computed<MemberRow[]>(() => {
   const map = new Map<Id, MemberRow>()
   for (const p of coverage.value) {
-    const row = map.get(p.member_id) ?? { member: ledger.idx.member(p.member_id), due: 0, paid: 0, pairs: [] }
+    const row = map.get(p.member_id) ?? {
+      member: ledger.idx.member(p.member_id),
+      due: 0,
+      paid: 0,
+      netted: nettedHere.value.has(p.member_id),
+      pairs: [],
+    }
     row.due += p.due
     row.paid += Math.min(p.paid, p.due)
     row.pairs.push(p)
@@ -59,7 +69,8 @@ const rows = computed<MemberRow[]>(() => {
   const order = new Map(ledger.members.map((m, i) => [m.id, i]))
   return [...map.values()].sort((a, b) => (order.get(a.member.id) ?? 0) - (order.get(b.member.id) ?? 0))
 })
-const unpaidCount = computed(() => rows.value.filter((r) => r.paid < r.due).length)
+const unpaidCount = computed(() => rows.value.filter((r) => r.paid < r.due && !r.netted).length)
+const nettedCount = computed(() => rows.value.filter((r) => r.paid < r.due && r.netted).length)
 
 const payers = computed(() => {
   const map = new Map<Id, { member: Member; advanced: number }>()
@@ -247,6 +258,7 @@ async function removeSession() {
             <h2 class="text-lg font-black">
               <template v-if="!rows.length">沒有人需要付錢</template>
               <template v-else-if="unpaidCount">還有 {{ unpaidCount }} 人沒付，共 <span class="num">{{ formatMoney(remaining) }}</span></template>
+              <template v-else-if="nettedCount">都算清了 🎉</template>
               <template v-else>大家都付了 🎉</template>
             </h2>
             <p class="mt-1 text-sm text-ink-400 dark:text-ink-300">
@@ -256,11 +268,11 @@ async function removeSession() {
             </p>
           </div>
           <div
-            v-if="settledBy === 'netted' && remaining > 0"
+            v-if="nettedCount"
             class="mx-5 mb-3 flex gap-2 rounded-2xl bg-ball-100 p-3 text-xs text-ink-700 dark:bg-ball-400/10 dark:text-ball-200"
           >
             <Info class="mt-0.5 size-4 shrink-0" />
-            這場之後全隊的帳曾經全部打平，所以這場已算清；下面沒勾的人不用再另外付。
+            標「已打平」的人在這場之後已經不欠任何人（例如在結餘總覽用轉帳還清），這場不用再另外付。
           </div>
           <ul v-if="rows.length" class="divide-y divide-ink-100 border-t border-ink-100 dark:divide-ink-800 dark:border-ink-800">
             <li v-for="row in rows" :key="row.member.id" class="px-5 py-3">
@@ -274,12 +286,25 @@ async function removeSession() {
                   </p>
                 </div>
                 <span v-if="row.paid >= row.due" class="chip-done"><Check class="size-3" />已付</span>
+                <span v-else-if="row.netted" class="chip-done"><Check class="size-3" />已打平</span>
                 <span v-else-if="row.paid > 0" class="chip-open">付了一部分</span>
                 <span v-else class="chip-muted">還沒付</span>
               </div>
               <div class="mt-2 space-y-2 pl-11">
                 <div v-for="p in row.pairs" :key="pairKey(p)" class="flex items-center gap-2">
+                  <!-- 已打平還記付款會變成多付，所以不給打勾 -->
+                  <div
+                    v-if="row.netted && p.paid < p.due"
+                    class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border border-dashed border-ball-500/60 px-3 py-2 text-sm font-semibold text-ink-500 dark:border-ball-400/40 dark:text-ink-300"
+                  >
+                    <span class="flex min-w-0 items-center gap-1.5">
+                      <CircleCheck class="size-4 shrink-0 text-ball-600 dark:text-ball-400" />
+                      <span class="truncate">已打平，不用再付給 {{ ledger.idx.member(p.payer_id).name }}</span>
+                    </span>
+                    <span class="num shrink-0">{{ formatMoney(p.due) }}</span>
+                  </div>
                   <button
+                    v-else
                     type="button"
                     class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-default"
                     :class="
@@ -302,7 +327,7 @@ async function removeSession() {
                     </span>
                     <span class="num shrink-0">{{ formatMoney(p.due) }}</span>
                   </button>
-                  <button v-if="p.paid < p.due && canMark(p)" type="button" class="btn-ghost shrink-0 !px-2.5 !py-2 text-xs" @click="partial(p)">
+                  <button v-if="p.paid < p.due && !row.netted && canMark(p)" type="button" class="btn-ghost shrink-0 !px-2.5 !py-2 text-xs" @click="partial(p)">
                     付一部分
                   </button>
                 </div>
