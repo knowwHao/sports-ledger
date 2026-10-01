@@ -8,7 +8,8 @@ defineProps<{
   payments: Payment[]
   member: (id: Id) => Member
   session?: (id: Id) => Session | undefined
-  deletable?: boolean
+  /** 只有收款人本人能刪 */
+  canDelete?: (p: Payment) => boolean
 }>()
 const emit = defineEmits<{ remove: [p: Payment] }>()
 </script>
@@ -34,7 +35,7 @@ const emit = defineEmits<{ remove: [p: Payment] }>()
         </p>
       </div>
       <span class="num shrink-0 font-bold">{{ formatMoney(p.amount) }}</span>
-      <button v-if="deletable" type="button" class="icon-btn !size-8 shrink-0" aria-label="刪除付款紀錄" @click="emit('remove', p)">
+      <button v-if="canDelete?.(p)" type="button" class="icon-btn !size-8 shrink-0" aria-label="刪除付款紀錄" @click="emit('remove', p)">
         <Trash2 class="size-4" />
       </button>
     </li>

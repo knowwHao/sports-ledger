@@ -11,6 +11,7 @@ import TransferModal from '@/components/TransferModal.vue'
 import PaymentList from '@/components/PaymentList.vue'
 import MemberSessions from '@/components/MemberSessions.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
+import { useWhoAmI } from '@/composables/useWhoAmI'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
 import { memberAdvanced, memberLines, memberPayments } from '@/lib/ledger'
@@ -19,6 +20,8 @@ import type { PairCoverage, Transfer } from '@/lib/balance'
 import type { Payment } from '@/types'
 
 const ledger = useLedgerReady()
+const me = useWhoAmI()
+const isMine = (to: string) => !!me.value && to === me.value
 const route = useRoute()
 const router = useRouter()
 
@@ -108,7 +111,7 @@ async function removePayment(p: Payment) {
               :member-id="member.id"
               :settlements="ledger.summary.settlements"
               :busy="busy"
-              actionable
+              :can-pay="(p) => isMine(p.payer_id)"
               @pay="pay"
               @open="(id) => router.push(`/sessions/${id}`)"
             />
@@ -119,7 +122,12 @@ async function removePayment(p: Payment) {
           <section v-if="transfers.length">
             <h2 class="section-title mb-3">他的轉帳建議</h2>
             <div class="card overflow-hidden">
-              <TransferList :transfers="transfers" :member="ledger.idx.member" actionable @record="(t) => (confirming = t)" />
+              <TransferList
+                :transfers="transfers"
+                :member="ledger.idx.member"
+                :can-record="(t) => isMine(t.to)"
+                @record="(t) => (confirming = t)"
+              />
             </div>
           </section>
           <section>
@@ -130,7 +138,7 @@ async function removePayment(p: Payment) {
                 :payments="payments"
                 :member="ledger.idx.member"
                 :session="sessionOf"
-                deletable
+                :can-delete="(p) => isMine(p.to_member_id)"
                 @remove="removePayment"
               />
               <EmptyState v-else :icon="ReceiptText" title="沒有付款紀錄" />

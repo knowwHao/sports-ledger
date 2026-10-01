@@ -1,7 +1,21 @@
-import type { Attendance, Expense, ExpenseShare, Member, Payment, Session, Settings, Sport } from '@/types'
+import type { Attendance, Expense, ExpenseShare, Id, Member, Payment, Session, Settings, Sport } from '@/types'
 import { computeDues } from '@/lib/balance'
 import { toYmd } from '@/lib/format'
 import { AVATAR_COLORS } from '@/lib/avatar'
+
+/** 示範模式只存在這台瀏覽器，密碼直接存明碼；Supabase 版存的是加鹽雜湊 */
+export interface DemoPin {
+  pin: string
+  key: string
+  failed: number
+  locked_until: string | null
+}
+
+export const DEMO_DEFAULT_PIN = '0000'
+
+export function newDemoPin(pin = DEMO_DEFAULT_PIN): DemoPin {
+  return { pin, key: randomToken(), failed: 0, locked_until: null }
+}
 
 export interface DemoDb {
   settings: Settings
@@ -12,6 +26,7 @@ export interface DemoDb {
   expenses: Expense[]
   shares: ExpenseShare[]
   payments: Payment[]
+  pins: Record<Id, DemoPin>
 }
 
 /** 固定種子的亂數，讓每次重置都得到同樣分布的示範資料 */
@@ -216,5 +231,6 @@ export function createDemoDb(today = new Date()): DemoDb {
     expenses,
     shares,
     payments,
+    pins: Object.fromEntries(members.map((m) => [m.id, newDemoPin()])),
   }
 }

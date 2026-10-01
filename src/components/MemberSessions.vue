@@ -11,7 +11,8 @@ const props = defineProps<{
   data: LedgerData
   memberId: Id
   settlements: Map<Id, SettleReason>
-  actionable?: boolean
+  /** 只有收款人本人能標記已付 */
+  canPay?: (p: PairCoverage) => boolean
   busy?: string | null
 }>()
 const emit = defineEmits<{ pay: [pair: PairCoverage, sessionId: Id]; open: [sessionId: Id] }>()
@@ -71,7 +72,7 @@ const groups = computed(() => {
           <template v-else>
             <span v-if="p.paid > 0" class="chip-open num">已付 {{ formatMoney(p.paid) }}</span>
             <button
-              v-if="actionable && !g.settled"
+              v-if="canPay?.(p) && !g.settled"
               type="button"
               class="btn-outline !px-3 !py-1.5 text-xs"
               :disabled="busy === `${g.session.id}:${p.payer_id}`"

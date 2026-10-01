@@ -11,6 +11,9 @@
 --
 -- 原理：前端在每個 API 請求帶 x-team-token header，RLS 以 team_token_ok() 比對 settings.team_token；
 -- 日後改回帳號登入時只要換掉 policy 裡的檢查條件，資料不用重建
+--
+-- 成員密碼：切換成員要輸入密碼，付款只有收款人本人能記錄與刪除（見 member_pins 與 create_payment）；
+-- 套用到舊資料庫時既有成員一律預設 0000，忘記密碼的重設 SQL 見 README
 -- =============================================================
 
 -- ---------- 預設權限 ----------
@@ -134,6 +137,17 @@ create table if not exists public.payments (
   constraint payments_distinct_parties check (from_member_id <> to_member_id)
 );
 
+-- 成員密碼：只存加鹽雜湊，anon／authenticated 完全沒有權限，只能經由下方的 RPC 驗證與修改
+-- session_key 是登入成功後發給裝置的憑證，記付款時帶上；改密碼會換發，其他裝置隨之登出
+create table if not exists public.member_pins (
+  member_id       uuid primary key references public.members (id) on delete cascade,
+  pin_salt        text not null,
+  pin_hash        text not null,
+  session_key     text not null,
+  failed_attempts int not null default 0,
+  locked_until    timestamptz
+);
+
 create index if not exists sessions_play_date_idx on public.sessions (play_date);
 create index if not exists sessions_sport_idx on public.sessions (sport_id);
 create index if not exists attendances_member_idx on public.attendances (member_id);
@@ -168,6 +182,192 @@ as $$
        from public.settings s
       where s.id = 1),
     false);
+$$;
+
+-- ---------- 成員密碼與付款 ----------
+-- 密碼是 4～8 位數字，空間很小，所以連續錯 5 次就鎖 15 分鐘；雜湊表本身讀不到，不需要慢雜湊
+
+create or replace function public.hash_member_pin(p_salt text, p_pin text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select encode(sha256(convert_to(p_salt || ':' || p_pin, 'UTF8')), 'hex');
+$$;
+
+-- 已存在的成員一律預設 0000；之後新增的成員由 create_members 一併設定密碼
+insert into public.member_pins (member_id, pin_salt, pin_hash, session_key)
+select x.id, x.salt, public.hash_member_pin(x.salt, '0000'), public.new_team_token()
+  from (select m.id, public.new_team_token() as salt
+          from public.members m
+         where not exists (select 1 from public.member_pins p where p.member_id = m.id)) x;
+
+-- 驗證密碼並記錄失敗次數；錯誤時用回傳值而不 raise，否則失敗次數的更新會一起被回滾
+create or replace function public.attempt_member_pin(p_member uuid, p_pin text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  r public.member_pins;
+  until timestamptz;
+begin
+  select * into r from public.member_pins where member_id = p_member for update;
+  if not found then
+    raise exception 'member not found' using errcode = 'P0002';
+  end if;
+  if r.locked_until > now() then
+    return jsonb_build_object('ok', false, 'locked_until', r.locked_until);
+  end if;
+  if r.pin_hash = public.hash_member_pin(r.pin_salt, coalesce(p_pin, '')) then
+    update public.member_pins set failed_attempts = 0, locked_until = null where member_id = p_member;
+    return jsonb_build_object('ok', true, 'key', r.session_key);
+  end if;
+  if r.failed_attempts + 1 >= 5 then
+    until := now() + interval '15 minutes';
+    update public.member_pins set failed_attempts = 0, locked_until = until where member_id = p_member;
+    return jsonb_build_object('ok', false, 'locked_until', until);
+  end if;
+  update public.member_pins set failed_attempts = r.failed_attempts + 1 where member_id = p_member;
+  return jsonb_build_object('ok', false, 'remaining', 5 - (r.failed_attempts + 1));
+end;
+$$;
+
+-- SL401：登入憑證不符（密碼已在別的裝置改過），前端據此要求重新輸入密碼
+create or replace function public.require_member(p_member uuid, p_key text)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.team_token_ok() then
+    raise exception 'invalid team token' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.member_pins where member_id = p_member and session_key = p_key) then
+    raise exception 'member session expired' using errcode = 'SL401';
+  end if;
+end;
+$$;
+
+-- 回傳 {ok, key} 或 {ok: false, remaining | locked_until}
+create or replace function public.member_login(p_member uuid, p_pin text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.team_token_ok() then
+    raise exception 'invalid team token' using errcode = '42501';
+  end if;
+  return public.attempt_member_pin(p_member, p_pin);
+end;
+$$;
+
+create or replace function public.member_change_pin(p_member uuid, p_old_pin text, p_new_pin text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  res jsonb;
+  salt text := public.new_team_token();
+  key text := public.new_team_token();
+begin
+  if not public.team_token_ok() then
+    raise exception 'invalid team token' using errcode = '42501';
+  end if;
+  if coalesce(p_new_pin, '') !~ '^[0-9]{4,8}$' then
+    raise exception 'pin must be 4-8 digits' using errcode = '22023';
+  end if;
+  res := public.attempt_member_pin(p_member, p_old_pin);
+  if not (res ->> 'ok')::boolean then
+    return res;
+  end if;
+  update public.member_pins
+     set pin_salt = salt, pin_hash = public.hash_member_pin(salt, p_new_pin), session_key = key
+   where member_id = p_member;
+  return jsonb_build_object('ok', true, 'key', key);
+end;
+$$;
+
+-- 新增成員只能走這裡，確保每位成員都有密碼；p_members 是 [{name, color, sort_order}]
+create or replace function public.create_members(p_members jsonb, p_pin text)
+returns void
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  m record;
+  new_id uuid;
+  salt text;
+begin
+  if not public.team_token_ok() then
+    raise exception 'invalid team token' using errcode = '42501';
+  end if;
+  if coalesce(p_pin, '') !~ '^[0-9]{4,8}$' then
+    raise exception 'pin must be 4-8 digits' using errcode = '22023';
+  end if;
+  for m in select * from jsonb_to_recordset(p_members) as x (name text, color text, sort_order int) loop
+    insert into public.members (name, color, sort_order)
+    values (btrim(m.name), coalesce(m.color, '#64748b'), coalesce(m.sort_order, 0))
+    returning id into new_id;
+    salt := public.new_team_token();
+    insert into public.member_pins (member_id, pin_salt, pin_hash, session_key)
+    values (new_id, salt, public.hash_member_pin(salt, p_pin), public.new_team_token());
+  end loop;
+end;
+$$;
+
+-- 只有收款人能記付款：收款人一律是登入的成員本人
+create or replace function public.create_payment(
+  p_member uuid, p_key text, p_from uuid, p_amount int, p_paid_at timestamptz, p_session uuid, p_note text)
+returns uuid
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  new_id uuid;
+begin
+  perform public.require_member(p_member, p_key);
+  insert into public.payments (from_member_id, to_member_id, amount, paid_at, session_id, note)
+  values (p_from, p_member, p_amount, coalesce(p_paid_at, now()), p_session, coalesce(p_note, ''))
+  returning id into new_id;
+  return new_id;
+end;
+$$;
+
+-- SL403：要刪的付款裡有不是收給自己的；整批不刪
+create or replace function public.delete_payments(p_member uuid, p_key text, p_ids uuid[])
+returns int
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  n int;
+begin
+  perform public.require_member(p_member, p_key);
+  if exists (select 1 from public.payments where id = any (p_ids) and to_member_id <> p_member) then
+    raise exception 'only the payee can delete a payment' using errcode = 'SL403';
+  end if;
+  delete from public.payments where id = any (p_ids) and to_member_id = p_member;
+  get diagnostics n = row_count;
+  return n;
+end;
 $$;
 
 -- ---------- 資料最後更新時間 ----------
@@ -218,7 +418,7 @@ $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
+  foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments', 'member_pins'] loop
     execute format('alter table public.%I enable row level security', t);
     -- TRUNCATE 不受 RLS 約束，只能靠收回權限擋下
     execute format('revoke truncate, trigger, references on public.%I from anon, authenticated', t);
@@ -237,6 +437,13 @@ $$;
 -- settings 是單列設定：只開放改 team_name，token 只能經由 regenerate_team_token() 換發，避免被改成弱 token
 revoke insert, update, delete on public.settings from anon, authenticated;
 grant select, update (team_name) on public.settings to anon, authenticated;
+
+-- 新增成員要同時設密碼，只能經由 create_members()
+revoke insert on public.members from anon, authenticated;
+-- 付款只能由收款人經 create_payment()／delete_payments() 寫入，沒有修改的需求
+revoke insert, update, delete on public.payments from anon, authenticated;
+-- member_pins 是唯一不授權的表：讀得到就等於拿到雜湊與登入憑證；RLS 與 team_all 只是保險
+revoke all on public.member_pins from anon, authenticated;
 
 -- ---------- RPC ----------
 
@@ -269,3 +476,19 @@ grant execute on function public.team_token_ok() to anon, authenticated;
 
 revoke execute on function public.regenerate_team_token() from public;
 grant execute on function public.regenerate_team_token() to anon, authenticated;
+
+-- 內部用：不能讓前端直接呼叫，否則可繞過 team token 檢查猜密碼
+revoke execute on function public.hash_member_pin(text, text) from public, anon, authenticated;
+revoke execute on function public.attempt_member_pin(uuid, text) from public, anon, authenticated;
+revoke execute on function public.require_member(uuid, text) from public, anon, authenticated;
+
+revoke execute on function public.member_login(uuid, text) from public;
+grant execute on function public.member_login(uuid, text) to anon, authenticated;
+revoke execute on function public.member_change_pin(uuid, text, text) from public;
+grant execute on function public.member_change_pin(uuid, text, text) to anon, authenticated;
+revoke execute on function public.create_members(jsonb, text) from public;
+grant execute on function public.create_members(jsonb, text) to anon, authenticated;
+revoke execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text) from public;
+grant execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text) to anon, authenticated;
+revoke execute on function public.delete_payments(uuid, text, uuid[]) from public;
+grant execute on function public.delete_payments(uuid, text, uuid[]) to anon, authenticated;

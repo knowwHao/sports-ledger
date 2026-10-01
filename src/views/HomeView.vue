@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { ArrowRight, CalendarPlus, Check, ChevronRight, Plus, Users } from 'lucide-vue-next'
+import { ArrowRight, CalendarPlus, ChevronRight, Plus, Users } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import SkeletonList from '@/components/SkeletonList.vue'
 import MemberAvatar from '@/components/MemberAvatar.vue'
@@ -9,7 +9,7 @@ import SessionStatusChip from '@/components/SessionStatusChip.vue'
 import SessionFormModal from '@/components/SessionFormModal.vue'
 import TransferModal from '@/components/TransferModal.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
-import { useWhoAmI } from '@/composables/useWhoAmI'
+import { askLogin, useWhoAmI } from '@/composables/useWhoAmI'
 import { sessionTotals } from '@/lib/ledger'
 import { formatDate, formatMoney, sessionTitle } from '@/lib/format'
 import type { Transfer } from '@/lib/balance'
@@ -20,7 +20,7 @@ const me = useWhoAmI()
 const router = useRouter()
 
 const showForm = ref(false)
-const confirming = ref<{ transfer: Transfer; received: boolean } | null>(null)
+const confirming = ref<Transfer | null>(null)
 
 const meMember = computed(() => ledger.activeMembers.find((m) => m.id === me.value) ?? null)
 const balance = computed(() => (meMember.value ? (ledger.summary.balances.get(meMember.value.id) ?? 0) : 0))
@@ -58,14 +58,14 @@ function onCreated(id: string) {
       <div class="space-y-4 lg:col-span-3">
         <section v-if="!meMember" class="card p-5">
           <h1 class="text-lg font-black">你是哪一位？</h1>
-          <p class="mt-1 text-sm text-ink-400 dark:text-ink-300">選好之後，這裡會直接告訴你要轉給誰、誰要轉給你</p>
+          <p class="mt-1 text-sm text-ink-400 dark:text-ink-300">點自己的名字並輸入密碼，這裡會直接告訴你要轉給誰、誰要轉給你</p>
           <div class="mt-4 flex flex-wrap gap-2">
             <button
               v-for="m in ledger.activeMembers"
               :key="m.id"
               type="button"
               class="flex items-center gap-1.5 rounded-full border border-ink-200 py-1 pr-3 pl-1 text-sm font-semibold transition hover:border-ink-400 dark:border-ink-700"
-              @click="me = m.id"
+              @click="askLogin(m.id)"
             >
               <MemberAvatar :name="m.name" :color="m.color" size="xs" />{{ m.name }}
             </button>
@@ -90,9 +90,6 @@ function onCreated(id: string) {
                   <MemberAvatar :name="ledger.idx.member(t.to).name" :color="ledger.idx.member(t.to).color" size="sm" />
                   <span class="min-w-0 flex-1 truncate font-semibold">{{ ledger.idx.member(t.to).name }}</span>
                   <span class="num font-black">{{ formatMoney(t.amount) }}</span>
-                  <button type="button" class="btn-primary !px-3 !py-1.5 text-xs" @click="confirming = { transfer: t, received: false }">
-                    <Check class="size-3.5" />我已轉帳
-                  </button>
                 </li>
                 <li v-for="t in toReceive" :key="t.from" class="flex items-center gap-3 py-2.5">
                   <MemberAvatar :name="ledger.idx.member(t.from).name" :color="ledger.idx.member(t.from).color" size="sm" />
@@ -104,12 +101,13 @@ function onCreated(id: string) {
                   <button
                     type="button"
                     class="btn !border !border-white/20 !px-3 !py-1.5 text-xs text-white hover:bg-white/10"
-                    @click="confirming = { transfer: t, received: true }"
+                    @click="confirming = t"
                   >
                     已收到
                   </button>
                 </li>
               </ul>
+              <p v-if="toPay.length" class="mt-3 text-xs text-ink-300">轉帳後請對方按「已收到」，帳才會更新</p>
             </template>
             <p v-else class="mt-2 text-2xl font-black">你目前沒有待結清的帳 🎉</p>
           </div>
@@ -160,6 +158,6 @@ function onCreated(id: string) {
     </div>
 
     <SessionFormModal :open="showForm" @close="showForm = false" @saved="onCreated" />
-    <TransferModal :transfer="confirming?.transfer ?? null" :received="confirming?.received" @close="confirming = null" />
+    <TransferModal :transfer="confirming" @close="confirming = null" />
   </div>
 </template>

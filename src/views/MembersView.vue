@@ -11,10 +11,12 @@ import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
 import { formatMoney } from '@/lib/format'
 import type { Member } from '@/types'
+import { isValidPin } from '@/lib/pin'
 
 const ledger = useLedgerReady()
 
 const input = ref('')
+const pin = ref('')
 const adding = ref(false)
 const editing = ref<Member | null>(null)
 const showArchived = ref(false)
@@ -26,11 +28,12 @@ const sessionCount = (id: string) => ledger.data.attendances.filter((a) => a.mem
 const balanceOf = (id: string) => ledger.summary.balances.get(id) ?? 0
 
 async function add() {
-  if (!parsed.value.length || adding.value) return
+  if (!parsed.value.length || !isValidPin(pin.value) || adding.value) return
   adding.value = true
   try {
-    const { added, skipped } = await ledger.createMembers(parsed.value)
+    const { added, skipped } = await ledger.createMembers(parsed.value, pin.value)
     input.value = ''
+    pin.value = ''
     if (added) toast.success(`已新增 ${added} 位成員${skipped ? `（${skipped} 位名字重複已略過）` : ''}`)
     else toast.info('名字都已經在名冊裡了')
   } catch (e) {
@@ -82,10 +85,23 @@ async function setActive(m: Member, value: boolean) {
           placeholder="可一次輸入多位，用空白或逗號分隔，例：小明 小華, 阿傑"
           autocomplete="off"
         />
-        <button type="submit" class="btn-primary" :disabled="!parsed.length || adding">
+        <input
+          v-model="pin"
+          class="input num sm:!w-36"
+          type="password"
+          inputmode="numeric"
+          autocomplete="new-password"
+          maxlength="8"
+          placeholder="初始密碼"
+          aria-label="初始密碼"
+        />
+        <button type="submit" class="btn-primary" :disabled="!parsed.length || !isValidPin(pin) || adding">
           <UserPlus class="size-4" />新增{{ parsed.length > 1 ? ` ${parsed.length} 位` : '' }}
         </button>
       </div>
+      <p class="mt-2 text-xs" :class="pin && !isValidPin(pin) ? 'font-semibold text-rose-600 dark:text-rose-400' : 'text-ink-400 dark:text-ink-300'">
+        初始密碼要是 4～8 位數字，一次新增多位時大家共用；請把密碼告訴對方，登入後可到「成員與設定」自己修改
+      </p>
       <div v-if="parsed.length > 1" class="mt-3 flex flex-wrap gap-1.5">
         <span v-for="n in parsed" :key="n" class="chip-muted">{{ n }}</span>
       </div>
