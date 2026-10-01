@@ -15,12 +15,17 @@ const input = ref<HTMLInputElement | null>(null)
 
 const member = computed(() => (pendingLogin.value ? ledger.idx.member(pendingLogin.value.memberId) : null))
 
+// 手機上視窗一彈出就叫出鍵盤時，iOS 的鍵盤工具列會先壓在視窗內容上，看起來像跑版，所以只在有滑鼠時自動聚焦
+function focusInput() {
+  if (window.matchMedia('(pointer: fine)').matches) input.value?.focus()
+}
+
 watch(pendingLogin, async (p) => {
   pin.value = ''
   error.value = ''
   if (p) {
     await nextTick()
-    input.value?.focus()
+    focusInput()
   }
 })
 
@@ -41,7 +46,7 @@ async function submit() {
     else {
       error.value = pinFailureText(r)
       pin.value = ''
-      input.value?.focus()
+      focusInput()
     }
   } catch (e) {
     error.value = errorMessage(e)
@@ -54,9 +59,9 @@ async function submit() {
 <template>
   <ModalSheet :open="!!pendingLogin" title="輸入密碼" top @close="finish(false)">
     <form v-if="member" id="pin-login-form" class="space-y-4" @submit.prevent="submit">
-      <div class="flex flex-col items-center gap-2 pt-1">
-        <MemberAvatar :name="member.name" :color="member.color" size="lg" />
-        <p class="font-bold">{{ member.name }}</p>
+      <div class="flex items-center gap-3 pt-1">
+        <MemberAvatar :name="member.name" :color="member.color" size="sm" />
+        <p class="min-w-0 truncate font-bold">{{ member.name }}</p>
       </div>
       <div>
         <label class="label" for="pin-login">密碼</label>
