@@ -13,7 +13,7 @@ const ledger = useLedgerStore()
 const nav = [
   { to: '/', label: '首頁', icon: House, match: (p: string) => p === '/' },
   { to: '/sessions', label: '場次', icon: CalendarDays, match: (p: string) => p.startsWith('/sessions') },
-  { to: '/team', label: '全隊', icon: UsersRound, match: (p: string) => p === '/team' || p.startsWith('/members/') },
+  { to: '/team', label: '結餘總覽', icon: UsersRound, match: (p: string) => p === '/team' || p.startsWith('/members/') },
 ]
 const settingsActive = computed(() => route.path === '/settings' || route.path === '/members')
 const teamName = computed(() => teamNameOr(ledger.data.team_name))
