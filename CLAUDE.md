@@ -21,8 +21,9 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 - **不做 CSV 匯出**：使用者明確拒絕過，不要提議也不要實作
 - **禁用 `v-html`**：使用者輸入一律走文字插值
 - **金鑰**：Supabase anon key 只能透過 env 注入，不得寫死；任何地方都不得使用 `service_role` key
-- **改 schema**：每張表都要有 `team_all` policy（`using`／`with check` 都是 `team_token_ok()`）、
-  收回 anon／authenticated 的 truncate，且 `schema.sql` 可重複執行；
+- **改 schema**：每張表都要開 RLS、有 `team_all` policy（`using`／`with check` 都是 `team_token_ok()`）、
+  明確 grant 給 anon／authenticated（預設權限已收回）且收回 truncate；新增 view 一律 `with (security_invoker = true)`；
+  新增函式要 `revoke execute ... from public` 再明確 grant；`schema.sql` 要可重複執行，也要能套在舊版 DB 上升級；
   改完用 PGlite（`@electric-sql/pglite`，不在依賴內，臨時裝在專案外）實跑 `schema.sql` 兩次，
   需先替身 `anon`／`authenticated` 角色，以 `set_config('request.headers', '{"x-team-token":"…"}', true)` 模擬 header，
   驗沒帶／帶錯 token 讀不到也寫不進；並同步 `src/types.ts`、兩個 repo 實作與 `src/data/demoSeed.ts`
@@ -36,6 +37,8 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 - `src/lib/ledger.ts`：畫面用彙整與排序；`src/lib/format.ts`：金額與日期格式
 - `src/data/repository.ts`：資料層介面與 `InvalidTokenError`；實作 `supabaseRepo.ts`（Supabase）、
   `demoRepo.ts`（localStorage，以 `guard()` 模擬 RLS 的 token 檢查）
+- `src/data/writeCheck.ts`：RLS 擋下 update／delete 時只會 0 列不報錯，`supabaseRepo.ts` 的 update／delete
+  一律 `.select(…)` 後經 `expectAffected` 判定（0 列時再確認 token，分辨連結失效與資料已不在）
 - `src/data/index.ts`：依 `VITE_SUPABASE_*` 有無選 repo；`demoSeed.ts` 是 Demo 示範資料
 - `src/types.ts`：資料型別；`src/stores/`：Pinia（`access.ts` 球隊 token 與存取狀態、`ledger.ts`）
 - `src/router.ts`：路由；`/t/:token` 記下 token 後以 replace 導回 `/`，網址不留 token

@@ -2,8 +2,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { ExpenseInput, Id, LedgerData, Member, PaymentInput, Session, SessionInput, SportInput } from '@/types'
 import type { ShareDue } from '@/lib/balance'
 import { InvalidTokenError, type LedgerRepository, type MemberPatch, type SessionPatch, type SportPatch } from './repository'
+import { verifyAffected, type OnMissing } from './writeCheck'
 
-/** 查詢成功時 data 必定有值；寫入類操作的回傳值不會被使用 */
+/** 查詢成功時 data 必定有值；沒接 .select() 的寫入 data 是 null，不可取用 */
 function check<T>(res: { data: T | null; error: { message: string; code?: string } | null }): T {
   // 42501：RLS 擋下寫入或 regenerate_team_token 拒絕，代表 token 已失效
   if (res.error?.code === '42501') throw new InvalidTokenError()
@@ -35,6 +36,19 @@ export class SupabaseRepo implements LedgerRepository {
     this.sb = this.createClient(token)
   }
 
+  /** settings 那一列看得到就代表 token 仍有效 */
+  private async tokenOk() {
+    return check(await this.sb.from('settings').select('id').eq('id', 1).maybeSingle()) !== null
+  }
+
+  /** update／delete 須加 .select(…) 取回受影響的列，token 失效時才不會被當成成功 */
+  private async expectAffected(
+    res: { data: unknown[] | null; error: { message: string; code?: string } | null },
+    onMissing: OnMissing,
+  ) {
+    await verifyAffected(check(res).length, onMissing, () => this.tokenOk())
+  }
+
   async loadLedger(): Promise<LedgerData> {
     const [settings, sports, members, sessions, attendances, expenses, shares, payments] = await Promise.all([
       this.sb.from('settings').select('team_name, updated_at').eq('id', 1).maybeSingle(),
@@ -63,7 +77,7 @@ export class SupabaseRepo implements LedgerRepository {
   }
 
   async updateTeamName(name: string) {
-    check(await this.sb.from('settings').update({ team_name: name }).eq('id', 1))
+    await this.expectAffected(await this.sb.from('settings').update({ team_name: name }).eq('id', 1).select('id'), 'fail')
   }
 
   async regenerateTeamToken() {
@@ -75,7 +89,7 @@ export class SupabaseRepo implements LedgerRepository {
   }
 
   async updateSport(id: Id, patch: SportPatch) {
-    check(await this.sb.from('sports').update(patch).eq('id', id))
+    await this.expectAffected(await this.sb.from('sports').update(patch).eq('id', id).select('id'), 'fail')
   }
 
   async createMembers(members: Pick<Member, 'name' | 'color' | 'sort_order'>[]) {
@@ -83,12 +97,14 @@ export class SupabaseRepo implements LedgerRepository {
   }
 
   async updateMember(id: Id, patch: MemberPatch) {
-    check(await this.sb.from('members').update(patch).eq('id', id))
+    await this.expectAffected(await this.sb.from('members').update(patch).eq('id', id).select('id'), 'fail')
   }
 
   async reorderMembers(orderedIds: Id[]) {
     await Promise.all(
-      orderedIds.map(async (id, i) => check(await this.sb.from('members').update({ sort_order: i }).eq('id', id))),
+      orderedIds.map(async (id, i) =>
+        this.expectAffected(await this.sb.from('members').update({ sort_order: i }).eq('id', id).select('id'), 'fail'),
+      ),
     )
   }
 
@@ -101,11 +117,11 @@ export class SupabaseRepo implements LedgerRepository {
   }
 
   async updateSession(id: Id, patch: SessionPatch) {
-    check(await this.sb.from('sessions').update(patch).eq('id', id))
+    await this.expectAffected(await this.sb.from('sessions').update(patch).eq('id', id).select('id'), 'fail')
   }
 
   async deleteSession(id: Id) {
-    check(await this.sb.from('sessions').delete().eq('id', id))
+    await this.expectAffected(await this.sb.from('sessions').delete().eq('id', id).select('id'), 'ignore')
   }
 
   async setAttendance(sessionId: Id, memberIds: Id[]) {
@@ -120,16 +136,22 @@ export class SupabaseRepo implements LedgerRepository {
       check(await this.sb.from('attendances').insert(toAdd.map((member_id) => ({ session_id: sessionId, member_id }))))
     }
     if (toRemove.length) {
-      check(await this.sb.from('attendances').delete().eq('session_id', sessionId).in('member_id', toRemove))
+      await this.expectAffected(
+        await this.sb.from('attendances').delete().eq('session_id', sessionId).in('member_id', toRemove).select('member_id'),
+        'ignore',
+      )
     }
   }
 
   async saveExpense(input: ExpenseInput, shares: ShareDue[]) {
     const { id, ...fields } = input
-    const res = id
-      ? await this.sb.from('expenses').update(fields).eq('id', id).select('id').single()
-      : await this.sb.from('expenses').insert(fields).select('id').single()
-    const expenseId = check(res as { data: { id: Id } | null; error: { message: string } | null }).id
+    let expenseId: Id
+    if (id) {
+      await this.expectAffected(await this.sb.from('expenses').update(fields).eq('id', id).select('id'), 'fail')
+      expenseId = id
+    } else {
+      expenseId = (check(await this.sb.from('expenses').insert(fields).select('id').single()) as { id: Id }).id
+    }
     // 先 upsert 再刪多餘的，中途失敗時最多殘留舊分攤，不會整筆分攤消失
     if (shares.length) {
       check(
@@ -141,12 +163,13 @@ export class SupabaseRepo implements LedgerRepository {
     const keep = shares.map((s) => s.member_id)
     let del = this.sb.from('expense_shares').delete().eq('expense_id', expenseId)
     if (keep.length) del = del.not('member_id', 'in', `(${keep.join(',')})`)
+    // 沒有多餘分攤時本來就是 0 列；token 已由上面寫入 expenses 那一步確認過
     check(await del)
     return expenseId
   }
 
   async deleteExpense(id: Id) {
-    check(await this.sb.from('expenses').delete().eq('id', id))
+    await this.expectAffected(await this.sb.from('expenses').delete().eq('id', id).select('id'), 'ignore')
   }
 
   async createPayments(payments: PaymentInput[]) {
@@ -154,6 +177,6 @@ export class SupabaseRepo implements LedgerRepository {
   }
 
   async deletePayments(ids: Id[]) {
-    if (ids.length) check(await this.sb.from('payments').delete().in('id', ids))
+    if (ids.length) await this.expectAffected(await this.sb.from('payments').delete().in('id', ids).select('id'), 'ignore')
   }
 }

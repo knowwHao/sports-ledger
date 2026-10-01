@@ -1,17 +1,45 @@
 -- =============================================================
 -- 球友記帳 Supabase schema
--- 在 Supabase Dashboard → SQL Editor 貼上整份執行即可；可重複執行
+-- 在 Supabase Dashboard → SQL Editor 貼上整份執行即可；可重複執行，也可直接套在舊版（帳號登入版）資料庫上升級
 --
 -- 不用帳號登入：拿到「球隊連結」的人都能查看與記帳，沒有連結的人什麼都讀不到、改不了
 --   1. 執行完後取得 token：
 --        select team_token from public.settings;
 --   2. 組成球隊連結貼到球友群組：
 --        https://knowwhao.github.io/sports-ledger/#/t/<token>
---   連結外流時到網站「設定 → 重新產生」，舊連結立即失效
+--   連結外流時到網站「設定 → 重新產生」，舊連結立即失效；連結被搶先重新產生時見 README 的救援 SQL
 --
 -- 原理：前端在每個 API 請求帶 x-team-token header，RLS 以 team_token_ok() 比對 settings.team_token；
 -- 日後改回帳號登入時只要換掉 policy 裡的檢查條件，資料不用重建
 -- =============================================================
+
+-- ---------- 預設權限 ----------
+-- Supabase 預設把 postgres 日後建立的表、函式、序列全部授權給 anon／authenticated，新物件一建好就對外公開；
+-- 改成預設不授權，本檔的物件都在下方明確 grant。之後新增物件的規則：
+--   table：開 RLS、加 team_all policy、明確 grant；view：一律 with (security_invoker = true)，否則會繞過 RLS；
+--   函式：PostgreSQL 內建讓 public 可執行，不受這裡影響，要自己 revoke execute ... from public 再明確 grant
+alter default privileges for role postgres in schema public revoke all on tables from anon, authenticated;
+alter default privileges for role postgres in schema public revoke all on functions from anon, authenticated;
+alter default privileges for role postgres in schema public revoke all on sequences from anon, authenticated;
+
+-- ---------- 清除舊版（帳號登入版）殘留 ----------
+-- 舊版的分享 RPC 與管理員 policy 不檢查球隊 token，留著就是後門；全新資料庫上這段什麼都不做
+drop function if exists public.get_public_ledger(text) cascade;
+drop function if exists public.regenerate_share_token() cascade;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
+    if to_regclass(format('public.%I', t)) is not null then
+      execute format('drop policy if exists admin_all on public.%I', t);
+    end if;
+  end loop;
+end;
+$$;
+
+drop function if exists public.is_admin() cascade;
+drop table if exists public.admins;
 
 -- ---------- 球隊連結 token ----------
 
@@ -33,6 +61,10 @@ create table if not exists public.settings (
   team_token text not null default public.new_team_token() check (length(team_token) >= 32),
   updated_at timestamptz not null default now()
 );
+-- 舊版 settings 沒有 team_token；必須在 team_token_ok() 之前補上，否則建函式時就找不到欄位而整份失敗
+alter table public.settings
+  add column if not exists team_token text not null default public.new_team_token() check (length(team_token) >= 32);
+alter table public.settings drop column if exists share_token;
 insert into public.settings (id) values (1) on conflict (id) do nothing;
 
 create table if not exists public.sports (

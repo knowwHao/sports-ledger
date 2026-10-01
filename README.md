@@ -73,11 +73,12 @@ npm run build      # 型別檢查 + 打包到 dist/
 ## Supabase 設定
 
 1. 到 [supabase.com](https://supabase.com) 建立新專案（Free 方案即可），記下資料庫密碼。
-2. 左側 **SQL Editor** → New query，把 [`supabase/schema.sql`](supabase/schema.sql) 整份貼上執行。這份 SQL 可以重複執行，會建立：
+2. 左側 **SQL Editor** → New query，把 [`supabase/schema.sql`](supabase/schema.sql) 整份貼上執行。這份 SQL 可以重複執行，也能直接套在跑過舊版（帳號登入版）的資料庫上，會先清掉舊版的分享函式、管理員 policy 與 `admins` 表，再建立：
    - 資料表、外鍵、索引，以及預設運動（匹克球、羽球）
    - `settings.team_token`：球隊連結用的隨機 token（244 bit），第一次執行時自動產生，之後重跑不會改變
    - RLS：每張表都要帶正確 token 才能讀寫，沒帶或帶錯時 select 是 0 筆、寫入被擋；`truncate` 權限已收回
    - `team_token_ok()`：RLS 用的檢查函式；`regenerate_team_token()`：帶正確 token 才能呼叫，換發並回傳新 token
+   - 預設權限：之後在 `public` 新建的表、函式、序列不再自動授權給 `anon`／`authenticated`，要自己明確 grant
 3. 取得球隊連結：在 SQL Editor 執行
 
    ```sql
@@ -125,6 +126,17 @@ Supabase 免費專案閒置一週會被暫停。`.github/workflows/keepalive.yml
 - 拿到連結的人都能查看與記帳；前端把 token 放在每個 API 請求的 `x-team-token` header，資料庫的 RLS 以 `team_token_ok()` 比對，沒有 token 的人（包括直接打 API 的陌生人或機器人）讀不到也改不了
 - 連結外流或有人退隊時，按「重新產生」，舊連結立即失效（已開過的裝置也會看到「連結已失效」），再把新連結傳到群組
 - 日後若要改回帳號登入，只要把 RLS policy 裡的 `team_token_ok()` 換成其他檢查條件，資料不用重建
+- 設定頁的連結預設遮住 token，按「顯示」才看得到完整網址；「複製連結」一律複製完整網址
+
+### 連結外流／被搶先重新產生時
+
+拿到連結的人也能按「重新產生」，外流後若對方搶先換掉 token，你手上的連結會跟著失效、網站上也無從換回。這時到 Supabase Dashboard 的 **SQL Editor** 執行：
+
+```sql
+update public.settings set team_token = public.new_team_token() where id = 1 returning team_token;
+```
+
+SQL Editor 以資料表擁有者 `postgres` 身分執行，不受 RLS 與球隊 token 限制。拿回傳的新 token 組成 `https://knowwhao.github.io/sports-ledger/#/t/<token>` 傳到群組，所有舊連結（包括對方手上的）立即失效。
 
 ## 專案結構
 

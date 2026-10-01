@@ -7,6 +7,8 @@ import {
   ArrowUp,
   ChevronRight,
   Copy,
+  Eye,
+  EyeOff,
   FlaskConical,
   Monitor,
   Moon,
@@ -43,6 +45,13 @@ watch(
 )
 
 const teamUrl = computed(() => (access.token ? `${location.origin}${location.pathname}#/t/${access.token}` : ''))
+// 預設遮住 token，避免設定頁截圖或旁人瞄到就外流
+const showToken = ref(false)
+const displayUrl = computed(() =>
+  showToken.value || !access.token
+    ? teamUrl.value
+    : `${location.origin}${location.pathname}#/t/••••••${access.token.slice(-4)}`,
+)
 
 async function saveName() {
   const name = teamName.value.trim()
@@ -63,6 +72,7 @@ async function copy() {
     await navigator.clipboard.writeText(teamUrl.value)
     toast.success('已複製球隊連結')
   } catch {
+    showToken.value = true
     toast.error('無法自動複製，請長按連結手動複製')
   }
 }
@@ -205,10 +215,13 @@ const themes: { v: ThemePref; label: string; icon: typeof Monitor }[] = [
           <template v-if="isDemo">Demo 模式下資料只在這個瀏覽器，連結只能在本機開啟。</template>
         </p>
         <div class="mt-4 rounded-2xl bg-ink-50 p-3 font-mono text-xs break-all text-ink-600 dark:bg-ink-950 dark:text-ink-300">
-          {{ teamUrl }}
+          {{ displayUrl }}
         </div>
         <div class="mt-3 flex flex-wrap gap-2">
           <button type="button" class="btn-primary" :disabled="!teamUrl" @click="copy"><Copy class="size-4" />複製連結</button>
+          <button type="button" class="btn-ghost" :disabled="!teamUrl" :aria-pressed="showToken" @click="showToken = !showToken">
+            <component :is="showToken ? EyeOff : Eye" class="size-4" />{{ showToken ? '隱藏' : '顯示' }}
+          </button>
           <button type="button" class="btn-ghost" :disabled="regenerating" @click="regenerate">
             <RefreshCw class="size-4" :class="regenerating && 'animate-spin'" />重新產生
           </button>
