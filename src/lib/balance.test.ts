@@ -107,6 +107,24 @@ describe('netBalances', () => {
     expect(b).toMatchObject({ due: 225, paid: 300 })
     expect(netBalances(after).get('b')).toBe(75)
   })
+
+  it('墊付者沒出席時只有墊付入帳，出席者都欠他', () => {
+    const data = ledger(
+      ['a', 'b', 'c', 'd'],
+      [session('s1', '2026-09-01')],
+      [expense('e1', 's1', 900, 'd', ['a', 'b', 'c'])],
+      [pay('a', 'd', 300, '2026-09-02T00:00:00.000Z', 's1'), pay('b', 'd', 300, '2026-09-02T00:00:00.000Z', 's1')],
+    )
+    expect(Object.fromEntries(netBalances(data))).toEqual({ a: 0, b: 0, c: -300, d: 300 })
+    expect(sessionCoverage(data, 's1').map((p) => [p.member_id, p.payer_id, p.due])).toEqual([
+      ['a', 'd', 300],
+      ['b', 'd', 300],
+      ['c', 'd', 300],
+    ])
+    expect(sessionSettlements(data).has('s1')).toBe(false)
+    const paid = { ...data, payments: [...data.payments, pay('c', 'd', 300, '2026-09-03T00:00:00.000Z', 's1')] }
+    expect(sessionSettlements(paid).get('s1')).toBe('direct')
+  })
 })
 
 describe('simplifyDebts', () => {

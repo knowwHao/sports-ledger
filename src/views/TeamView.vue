@@ -60,7 +60,7 @@ async function removePayment(p: Payment) {
 
 <template>
   <div>
-    <PageHeader title="全隊" subtitle="所有運動、所有場次合在一起算" />
+    <PageHeader title="結餘總覽" subtitle="所有運動、所有場次合在一起算" />
 
     <SkeletonList v-if="!ledger.loaded" :rows="5" />
 

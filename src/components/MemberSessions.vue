@@ -5,7 +5,7 @@ import SportBadge from './SportBadge.vue'
 import type { Id, LedgerData } from '@/types'
 import { indexLedger, memberLines } from '@/lib/ledger'
 import { sessionCoverage, type PairCoverage, type SettleReason } from '@/lib/balance'
-import { formatMoney, sessionSubtitle, sessionTitle } from '@/lib/format'
+import { formatMoney, sessionSortKey, sessionSubtitle, sessionTitle } from '@/lib/format'
 
 const props = defineProps<{
   data: LedgerData
@@ -19,25 +19,22 @@ const emit = defineEmits<{ pay: [pair: PairCoverage, sessionId: Id]; open: [sess
 const idx = computed(() => indexLedger(props.data))
 
 const groups = computed(() => {
-  const map = new Map<Id, { sessionId: Id; lines: ReturnType<typeof memberLines> }>()
-  for (const line of memberLines(props.data, props.memberId)) {
-    const g = map.get(line.session.id) ?? { sessionId: line.session.id, lines: [] }
-    g.lines.push(line)
-    map.set(line.session.id, g)
-  }
-  return [...map.values()].map((g) => {
-    const session = g.lines[0].session
-    const pairs = sessionCoverage(props.data, g.sessionId).filter((p) => p.member_id === props.memberId)
-    const advanced = props.data.expenses.filter((e) => e.session_id === g.sessionId && e.payer_member_id === props.memberId)
-    return {
+  const map = new Map<Id, ReturnType<typeof memberLines>>()
+  for (const line of memberLines(props.data, props.memberId)) map.set(line.session.id, [...(map.get(line.session.id) ?? []), line])
+  // 代付但沒分攤的場次不在 memberLines 裡，要另外補上
+  const advancedAll = props.data.expenses.filter((e) => e.payer_member_id === props.memberId)
+  const ids = new Set([...map.keys(), ...advancedAll.map((e) => e.session_id)])
+  return props.data.sessions
+    .filter((s) => ids.has(s.id))
+    .sort((a, b) => sessionSortKey(b).localeCompare(sessionSortKey(a)) || b.created_at.localeCompare(a.created_at))
+    .map((session) => ({
       session,
       sport: idx.value.sport(session.sport_id),
-      lines: g.lines,
-      pairs,
-      advanced,
-      settled: props.settlements.get(g.sessionId),
-    }
-  })
+      lines: map.get(session.id) ?? [],
+      pairs: sessionCoverage(props.data, session.id).filter((p) => p.member_id === props.memberId),
+      advanced: advancedAll.filter((e) => e.session_id === session.id),
+      settled: props.settlements.get(session.id),
+    }))
 })
 </script>
 

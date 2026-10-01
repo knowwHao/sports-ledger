@@ -70,7 +70,7 @@ async function removePayment(p: Payment) {
     <SkeletonList v-if="!ledger.loaded" />
 
     <EmptyState v-else-if="!member" :icon="SearchX" title="找不到這位成員">
-      <RouterLink to="/team" class="btn-primary">回全隊</RouterLink>
+      <RouterLink to="/team" class="btn-primary">回結餘總覽</RouterLink>
     </EmptyState>
 
     <template v-else>
@@ -90,7 +90,7 @@ async function removePayment(p: Payment) {
             {{ balance < 0 ? '還要轉錢給別人' : balance > 0 ? '別人還要轉錢給他' : '沒有待結清的帳' }}
           </p>
         </div>
-        <dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+        <dl class="grid w-full grid-cols-2 gap-x-6 gap-y-1 border-t border-ink-100 pt-4 text-sm sm:w-auto sm:border-0 sm:pt-0 dark:border-ink-800">
           <dt class="text-ink-400">累計先付</dt>
           <dd class="num text-right font-semibold">{{ formatMoney(advanced) }}</dd>
           <dt class="text-ink-400">累計應付</dt>
@@ -103,7 +103,7 @@ async function removePayment(p: Payment) {
           <section>
             <h2 class="section-title mb-3">參與的場次</h2>
             <MemberSessions
-              v-if="lines.length"
+              v-if="lines.length || advanced > 0"
               :data="ledger.data"
               :member-id="member.id"
               :settlements="ledger.summary.settlements"

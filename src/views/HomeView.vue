@@ -154,7 +154,7 @@ function onCreated(id: string) {
           to="/team"
           class="mt-4 flex items-center justify-end gap-1 text-sm font-semibold text-ink-500 hover:text-ink-800 dark:text-ink-300 dark:hover:text-ink-100"
         >
-          查看全隊帳<ChevronRight class="size-4" />
+          查看結餘總覽<ChevronRight class="size-4" />
         </RouterLink>
       </section>
     </div>
