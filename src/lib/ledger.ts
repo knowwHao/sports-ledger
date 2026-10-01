@@ -1,6 +1,7 @@
 import type { Expense, ExpenseShare, Id, LedgerData, Member, Payment, Session, Sport } from '@/types'
 import {
   netBalances,
+  nettedMembers,
   sessionSettlements,
   sessionStatuses,
   simplifyDebts,
@@ -47,6 +48,8 @@ export interface LedgerSummary {
   balances: Map<Id, number>
   transfers: Transfer[]
   settlements: Map<Id, SettleReason>
+  /** 各場已個人事後打平的欠款者 */
+  netted: Map<Id, Set<Id>>
   statuses: Map<Id, SessionStatus>
   /** 正餘額總和＝全隊尚待轉帳總額 */
   outstanding: number
@@ -55,11 +58,13 @@ export interface LedgerSummary {
 export function summarize(data: LedgerData): LedgerSummary {
   const balances = netBalances(data)
   const transfers = simplifyDebts(balances)
-  const settlements = sessionSettlements(data)
+  const netted = nettedMembers(data)
+  const settlements = sessionSettlements(data, netted)
   return {
     balances,
     transfers,
     settlements,
+    netted,
     statuses: sessionStatuses(data, settlements),
     outstanding: transfers.reduce((s, t) => s + t.amount, 0),
   }

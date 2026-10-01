@@ -3,6 +3,7 @@ import type { Expense, ExpenseShare, Member, Payment, Session } from '@/types'
 import {
   computeDues,
   netBalances,
+  nettedMembers,
   sessionCoverage,
   sessionSettlements,
   sessionStatuses,
@@ -207,6 +208,76 @@ describe('sessionSettlements', () => {
   it('沒有付款也沒有抵銷 → 未結清', () => {
     const data = ledger(['a', 'b'], [session('s1', '2026-09-01')], [expense('e1', 's1', 600, 'a', ['a', 'b'])])
     expect(sessionSettlements(data).has('s1')).toBe(false)
+  })
+
+  it('每位欠款者都已直接付清或個人打平 → 已打平，即使全隊還沒歸零', () => {
+    const data = ledger(
+      ['a', 'b', 'c', 'd'],
+      [session('s1', '2026-09-01'), session('s2', '2026-09-08')],
+      [expense('e1', 's1', 600, 'a', ['a', 'b']), expense('e2', 's2', 600, 'c', ['c', 'd'])],
+      [pay('b', 'a', 300, '2026-09-10T00:00:00.000Z')],
+    )
+    const st = sessionSettlements(data)
+    expect(st.get('s1')).toBe('netted')
+    expect(st.has('s2')).toBe(false)
+  })
+
+  it('有人直接付清、有人個人打平 → 已打平', () => {
+    const data = ledger(
+      ['a', 'b', 'c'],
+      [session('s1', '2026-09-01')],
+      [expense('e1', 's1', 900, 'a', ['a', 'b', 'c'])],
+      [pay('b', 'a', 300, '2026-09-02T00:00:00.000Z', 's1'), pay('c', 'a', 300, '2026-09-05T00:00:00.000Z')],
+    )
+    expect(sessionSettlements(data).get('s1')).toBe('netted')
+  })
+})
+
+describe('nettedMembers', () => {
+  it('用轉帳還清自己的欠款 → 他在之前的場次算已打平，還沒付的人不算', () => {
+    const data = ledger(
+      ['a', 'b', 'c'],
+      [session('s1', '2026-09-01')],
+      [expense('e1', 's1', 900, 'a', ['a', 'b', 'c'])],
+      [pay('b', 'a', 300, '2026-09-05T00:00:00.000Z')],
+    )
+    expect([...(nettedMembers(data).get('s1') ?? [])]).toEqual(['b'])
+    expect(sessionSettlements(data).has('s1')).toBe(false)
+  })
+
+  it('打平之後又欠新的錢，舊場次維持已打平，新場次不算', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s1', '2026-09-01'), session('s2', '2026-09-15')],
+      [expense('e1', 's1', 600, 'a', ['a', 'b']), expense('e2', 's2', 600, 'a', ['a', 'b'])],
+      [pay('b', 'a', 300, '2026-09-05T00:00:00.000Z')],
+    )
+    const netted = nettedMembers(data)
+    expect(netted.get('s1')?.has('b')).toBe(true)
+    expect(netted.get('s2')?.has('b') ?? false).toBe(false)
+    const st = sessionSettlements(data)
+    expect(st.get('s1')).toBe('netted')
+    expect(st.has('s2')).toBe(false)
+  })
+
+  it('別人欠他的錢足以抵掉這場的應付 → 這場一記就算打平', () => {
+    const data = ledger(
+      ['a', 'b', 'c'],
+      [session('s0', '2026-08-25'), session('s1', '2026-09-01')],
+      [expense('e0', 's0', 600, 'b', ['b', 'c']), expense('e1', 's1', 600, 'a', ['a', 'b'])],
+    )
+    expect(nettedMembers(data).get('s1')?.has('b')).toBe(true)
+    expect(nettedMembers(data).get('s0')?.has('c') ?? false).toBe(false)
+  })
+
+  it('只付了一部分、還欠錢 → 不算打平', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s1', '2026-09-01')],
+      [expense('e1', 's1', 600, 'a', ['a', 'b'])],
+      [pay('b', 'a', 200, '2026-09-05T00:00:00.000Z')],
+    )
+    expect(nettedMembers(data).get('s1')?.has('b') ?? false).toBe(false)
   })
 })
 

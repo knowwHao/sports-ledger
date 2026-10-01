@@ -110,6 +110,7 @@ async function removePayment(p: Payment) {
               :data="ledger.data"
               :member-id="member.id"
               :settlements="ledger.summary.settlements"
+              :netted="ledger.summary.netted"
               :busy="busy"
               :can-pay="(p) => isMine(p.payer_id)"
               @pay="pay"
