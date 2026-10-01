@@ -4,7 +4,8 @@
 
 - 前端：Vue 3 + Vite + TypeScript + Tailwind CSS v4，可安裝成 PWA
 - 資料：Supabase（免費方案即可）；沒設定時自動進入 **Demo 模式**，資料存在瀏覽器
-- 部署：GitHub Pages（GitHub Actions 自動部署）
+- 部署：GitHub Pages（GitHub Actions 自動部署），網址 `https://knowwhao.github.io/sports-ledger/`
+- 原始碼：<https://github.com/knowwHao/sports-ledger>
 
 ## 功能
 
@@ -55,10 +56,10 @@
 
 ## 本機開發（Demo 模式）
 
-需要 Node.js 20 以上。
+需要 Node.js 22（22.12 以上）或 24，這是 vitest 5 的要求；CI 用 Node 22。
 
 ```bash
-npm install
+npm ci             # 依 package-lock.json 安裝
 npm run dev        # http://localhost:5173
 npm test           # 單元測試（vitest）
 npm run build      # 型別檢查 + 打包到 dist/
@@ -82,7 +83,7 @@ npm run build      # 型別檢查 + 打包到 dist/
    - `regenerate_share_token()`：重新產生分享連結（僅限管理員）
 3. 關閉公開註冊並設定網址（請在建立管理員之前完成）：
    - **Authentication → Sign In / Providers**：關閉 **Allow new users to sign up**，並保持 **Confirm email** 開啟。anon key 是公開的，不關閉的話任何人都能自行註冊成登入使用者。
-   - **Authentication → URL Configuration**：把 **Site URL** 設成 `https://<帳號>.github.io/<repo>/`，驗證信與密碼重設信的連結才會導回正確的網站。
+   - **Authentication → URL Configuration**：把 **Site URL** 設成 `https://knowwhao.github.io/sports-ledger/`（fork 的話是 `https://<帳號>.github.io/<repo>/`），驗證信與密碼重設信的連結才會導回正確的網站。
 4. 建立管理員帳號：**Authentication → Users → Add user → Create new user**，填 Email 與密碼，勾選 **Auto Confirm User**。
 5. 把這個帳號加入管理員：回到 SQL Editor 執行（只會加入已完成 Email 驗證的帳號）
 
@@ -105,15 +106,19 @@ npm run build      # 型別檢查 + 打包到 dist/
 
 ## 部署到 GitHub Pages
 
-1. 在 GitHub 建立 repo（例如 `sports-ledger`），把專案 push 到 `main`。
+1. 在 GitHub 建立 repo（本專案是 `https://github.com/knowwHao/sports-ledger`），把專案 push 到 `main`。
 2. **Settings → Secrets and variables → Actions → New repository secret**，新增：
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_ANON_KEY`
 
    （不設定也能部署，網站會以 Demo 模式運作。）
 3. **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**。
-4. 之後每次 push 到 `main`，`.github/workflows/deploy.yml` 會跑測試、打包並部署。網址是 `https://<帳號>.github.io/<repo>/`，打包時會自動以 repo 名稱設定 Vite 的 `base`。
+4. 之後每次 push 到 `main`，`.github/workflows/deploy.yml` 會跑測試、打包並部署。網址是 `https://<帳號>.github.io/<repo>/`，本專案為 `https://knowwhao.github.io/sports-ledger/`；打包時會自動以 repo 名稱設定 Vite 的 `base`。
+
+   網址裡的帳號一律寫小寫是**依 GitHub 文件推斷**，尚未實測：[Creating a GitHub Pages site](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site) 要求帳號含大寫時，使用者站台的 repo 名稱要改成小寫的 `<帳號>.github.io`；網域名稱本身也不分大小寫。第一次部署成功後，以 **Settings → Pages** 顯示的網址為準。
 5. 路由使用 hash 模式（網址長得像 `.../#/sessions`），GitHub Pages 重新整理深層頁面也不會 404。
+
+未來有需要時，可以改部署到 Cloudflare Workers（已有實驗分支 `cloudflare-attempt`，尚未合併）。
 
 ### 避免 Supabase 免費專案被暫停
 
@@ -123,7 +128,7 @@ Supabase 免費專案閒置一週會被暫停。`.github/workflows/keepalive.yml
 
 ## 分享連結
 
-- 管理員在 **設定 → 球友分享連結** 複製連結，貼到球隊群組即可，網址格式為 `https://<帳號>.github.io/<repo>/#/s/<token>`
+- 管理員在 **設定 → 球友分享連結** 複製連結，貼到球隊群組即可，網址格式為 `https://knowwhao.github.io/sports-ledger/#/s/<token>`
 - 拿到連結的人不用登入就能看到所有人的餘額、結算建議與明細，但不能修改
 - 連結外流或有人退隊時，按「重新產生」，舊連結立即失效，再把新連結傳到群組
 
@@ -143,3 +148,15 @@ src/
 supabase/schema.sql     資料庫結構、RLS、RPC
 .github/workflows/      部署與 keepalive
 ```
+
+## 用 Claude Code 繼續開發
+
+根目錄的 [`CLAUDE.md`](CLAUDE.md) 寫了常用指令、目錄地圖和硬性規則，每個 Claude Code session 都會自動載入。開新 session 後可以直接這樣下指令：
+
+- 「新增一種運動『網球』，預設費用列是場地費和球費，`supabase/schema.sql` 和 Demo 示範資料都要加」
+- 「場次詳情頁加一個備註欄位，Supabase schema 一起改，記得驗 RLS 和 `get_public_ledger`」
+- 「跑測試，再開瀏覽器用 375px 寬檢查手機版有沒有水平溢出」
+- 「部署前幫我檢查：`npm test`、`npm run build` 都跑一次，再看 `git status` 有沒有漏掉的檔案」
+- 「結算建議的金額怪怪的，先補一個能重現的測試再修」
+- 「GitHub Actions 部署失敗了，幫我看原因」（先把 Actions 頁面的錯誤 log 貼給它）
+- 「改完了，幫我 commit」（push 前它會先問你）
