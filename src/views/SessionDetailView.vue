@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check, Circle, CircleCheck, Ellipsis, Info, Lock, LockOpen, Pencil, Receipt, SearchX, Trash2 } from 'lucide-vue-next'
+import { Check, Circle, CircleCheck, Ellipsis, Lock, LockOpen, Pencil, Receipt, SearchX, Trash2 } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import MemberAvatar from '@/components/MemberAvatar.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -70,7 +70,6 @@ const rows = computed<MemberRow[]>(() => {
   return [...map.values()].sort((a, b) => (order.get(a.member.id) ?? 0) - (order.get(b.member.id) ?? 0))
 })
 const unpaidCount = computed(() => rows.value.filter((r) => r.paid < r.due && !r.netted).length)
-const nettedCount = computed(() => rows.value.filter((r) => r.paid < r.due && r.netted).length)
 
 const payers = computed(() => {
   const map = new Map<Id, { member: Member; advanced: number }>()
@@ -258,7 +257,6 @@ async function removeSession() {
             <h2 class="text-lg font-black">
               <template v-if="!rows.length">沒有人需要付錢</template>
               <template v-else-if="unpaidCount">還有 {{ unpaidCount }} 人沒付，共 <span class="num">{{ formatMoney(remaining) }}</span></template>
-              <template v-else-if="nettedCount">都算清了 🎉</template>
               <template v-else>大家都付了 🎉</template>
             </h2>
             <p class="mt-1 text-sm text-ink-400 dark:text-ink-300">
@@ -266,13 +264,6 @@ async function removeSession() {
                 {{ i ? '、' : '' }}{{ p.member.name }} 先付了 <span class="num font-semibold">{{ formatMoney(p.advanced) }}</span>
               </template>
             </p>
-          </div>
-          <div
-            v-if="nettedCount"
-            class="mx-5 mb-3 flex gap-2 rounded-2xl bg-ball-100 p-3 text-xs text-ink-700 dark:bg-ball-400/10 dark:text-ball-200"
-          >
-            <Info class="mt-0.5 size-4 shrink-0" />
-            標「已打平」的人在這場之後已經不欠任何人（例如在結餘總覽用轉帳還清），這場不用再另外付。
           </div>
           <ul v-if="rows.length" class="divide-y divide-ink-100 border-t border-ink-100 dark:divide-ink-800 dark:border-ink-800">
             <li v-for="row in rows" :key="row.member.id" class="px-5 py-3">
@@ -282,33 +273,21 @@ async function removeSession() {
                   <p class="truncate font-semibold">{{ row.member.name }}</p>
                   <p class="text-xs text-ink-400 dark:text-ink-300">
                     應付 <span class="num font-semibold">{{ formatMoney(row.due) }}</span>
-                    <template v-if="row.paid > 0 && row.paid < row.due"> · 已付 {{ formatMoney(row.paid) }}</template>
+                    <template v-if="row.paid > 0 && row.paid < row.due && !row.netted"> · 已付 {{ formatMoney(row.paid) }}</template>
                   </p>
                 </div>
-                <span v-if="row.paid >= row.due" class="chip-done"><Check class="size-3" />已付</span>
-                <span v-else-if="row.netted" class="chip-done"><Check class="size-3" />已打平</span>
+                <span v-if="row.paid >= row.due || row.netted" class="chip-done"><Check class="size-3" />已付</span>
                 <span v-else-if="row.paid > 0" class="chip-open">付了一部分</span>
                 <span v-else class="chip-muted">還沒付</span>
               </div>
               <div class="mt-2 space-y-2 pl-11">
                 <div v-for="p in row.pairs" :key="pairKey(p)" class="flex items-center gap-2">
-                  <!-- 已打平還記付款會變成多付，所以不給打勾 -->
-                  <div
-                    v-if="row.netted && p.paid < p.due"
-                    class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border border-dashed border-ball-500/60 px-3 py-2 text-sm font-semibold text-ink-500 dark:border-ball-400/40 dark:text-ink-300"
-                  >
-                    <span class="flex min-w-0 items-center gap-1.5">
-                      <CircleCheck class="size-4 shrink-0 text-ball-600 dark:text-ball-400" />
-                      <span class="truncate">已打平，不用再付給 {{ ledger.idx.member(p.payer_id).name }}</span>
-                    </span>
-                    <span class="num shrink-0">{{ formatMoney(p.due) }}</span>
-                  </div>
+                  <!-- 個人已打平的人在這場不用再付，再打勾會變成多付，所以顯示已付但不能按 -->
                   <button
-                    v-else
                     type="button"
                     class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-default"
                     :class="
-                      p.paid >= p.due
+                      p.paid >= p.due || row.netted
                         ? 'border-ball-500 bg-ball-200/60 text-ink-900 dark:border-ball-400/50 dark:bg-ball-400/10 dark:text-ball-200'
                         : p.paid > 0
                           ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-200'
@@ -316,12 +295,12 @@ async function removeSession() {
                             ? 'border-ink-200 hover:border-ink-400 dark:border-ink-700'
                             : 'border-dashed border-ink-200 text-ink-400 dark:border-ink-700'
                     "
-                    :aria-pressed="p.paid >= p.due"
-                    :disabled="!canMark(p) || busyPair === pairKey(p)"
+                    :aria-pressed="p.paid >= p.due || row.netted"
+                    :disabled="!canMark(p) || busyPair === pairKey(p) || (row.netted && p.paid < p.due)"
                     @click="togglePair(p)"
                   >
                     <span class="flex min-w-0 items-center gap-1.5">
-                      <CircleCheck v-if="p.paid >= p.due" class="size-4 shrink-0" />
+                      <CircleCheck v-if="p.paid >= p.due || row.netted" class="size-4 shrink-0" />
                       <Circle v-else class="size-4 shrink-0 text-ink-300" />
                       <span class="truncate">已付給 {{ ledger.idx.member(p.payer_id).name }}</span>
                     </span>
