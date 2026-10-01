@@ -103,7 +103,7 @@ async function removePayment(p: Payment) {
           <section>
             <h2 class="section-title mb-3">參與的場次</h2>
             <MemberSessions
-              v-if="lines.length"
+              v-if="lines.length || advanced > 0"
               :data="ledger.data"
               :member-id="member.id"
               :settlements="ledger.summary.settlements"

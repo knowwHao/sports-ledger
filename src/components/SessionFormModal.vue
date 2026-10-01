@@ -64,14 +64,17 @@ const attendeePool = computed(() => {
 })
 const attendeeMembers = computed(() => ledger.members.filter((m) => form.attendees.includes(m.id)))
 const main = computed(() => form.rows[0])
-const payerChips = computed(() => {
-  const ids = new Set([...form.attendees, main.value?.payer].filter(Boolean))
-  return ledger.members.filter((m) => ids.has(m.id))
-})
-const payerOptions = computed(() => {
+// 付錢的人不一定有出席（例如代訂場地沒來打），所以其他成員也要能選
+const payerPool = computed(() => {
   const ids = new Set(form.rows.map((r) => r.payer))
   return ledger.members.filter((m) => m.active || ids.has(m.id))
 })
+const attendingPayers = computed(() => payerPool.value.filter((m) => form.attendees.includes(m.id)))
+const otherPayers = computed(() => payerPool.value.filter((m) => !form.attendees.includes(m.id)))
+const showOtherPayers = ref(false)
+const otherPayersOpen = computed(
+  () => showOtherPayers.value || otherPayers.value.some((m) => m.id === main.value?.payer),
+)
 
 /** 一筆總額時的費用名稱，例如羽球是「場地費＋羽球」 */
 function singleLabel(sportId: string): string {
@@ -127,6 +130,7 @@ watch(
     })
     if (s) loadSession(s)
     else pickSport(ledger.activeSports[0]?.id ?? '')
+    showOtherPayers.value = false
     showMore.value = !!(s && (s.title || s.location || s.note || form.rows.some((r) => r.custom)))
   },
   { immediate: true },
@@ -329,24 +333,36 @@ async function submit() {
         </div>
         <div>
           <span class="label">誰付的？</span>
-          <div v-if="payerChips.length" class="flex flex-wrap gap-2">
+          <p v-if="!attendingPayers.length" class="mb-2 text-sm text-ink-400">先勾選{{ isOther ? '要分攤的人' : '出席的人' }}</p>
+          <div class="flex flex-wrap gap-2">
             <button
-              v-for="m in payerChips"
+              v-for="m in otherPayersOpen ? [...attendingPayers, ...otherPayers] : attendingPayers"
               :key="m.id"
               type="button"
               :aria-pressed="main.payer === m.id"
               class="flex items-center gap-1.5 rounded-full border py-1 pr-3 pl-1 text-sm font-semibold transition"
-              :class="
+              :class="[
                 main.payer === m.id
                   ? 'border-ink-900 bg-ink-900 text-white dark:border-ball-400 dark:bg-ball-400 dark:text-ink-950'
-                  : 'border-ink-200 text-ink-500 dark:border-ink-700 dark:text-ink-300'
-              "
+                  : 'border-ink-200 text-ink-500 dark:border-ink-700 dark:text-ink-300',
+                !form.attendees.includes(m.id) && main.payer !== m.id && 'border-dashed',
+              ]"
               @click="main.payer = m.id"
             >
-              <MemberAvatar :name="m.name" :color="m.color" size="xs" />{{ m.name }}
+              <MemberAvatar :name="m.name" :color="m.color" size="xs" :muted="!form.attendees.includes(m.id) && main.payer !== m.id" />{{ m.name }}
+            </button>
+            <button
+              v-if="!otherPayersOpen && otherPayers.length"
+              type="button"
+              class="flex items-center gap-1 rounded-full border border-dashed border-ink-200 px-3 py-1 text-sm font-semibold text-ink-400 transition hover:text-ink-700 dark:border-ink-700 dark:hover:text-ink-100"
+              @click="showOtherPayers = true"
+            >
+              <Plus class="size-3.5" />{{ isOther ? '其他人' : '沒出席的人' }}
             </button>
           </div>
-          <p v-else class="text-sm text-ink-400">先勾選{{ isOther ? '要分攤的人' : '出席的人' }}</p>
+          <p v-if="main.payer && !form.attendees.includes(main.payer)" class="mt-1.5 text-xs text-ink-400 dark:text-ink-300">
+            {{ ledger.idx.member(main.payer).name }} 只墊錢、不分攤，{{ isOther ? '分攤的人' : '出席的人' }}的錢都付給他
+          </p>
         </div>
       </template>
 
@@ -379,7 +395,12 @@ async function submit() {
               :class="!row.payer && (row.amount ?? 0) > 0 && 'border-amber-400'"
             >
               <option value="" disabled>誰付的？</option>
-              <option v-for="m in payerOptions" :key="m.id" :value="m.id">{{ m.name }} 付的</option>
+              <optgroup :label="isOther ? '分攤的人' : '出席的人'">
+                <option v-for="m in attendingPayers" :key="m.id" :value="m.id">{{ m.name }} 付的</option>
+              </optgroup>
+              <optgroup v-if="otherPayers.length" :label="isOther ? '其他人（不分攤）' : '沒出席的人（不分攤）'">
+                <option v-for="m in otherPayers" :key="m.id" :value="m.id">{{ m.name }} 付的</option>
+              </optgroup>
             </select>
           </div>
           <button type="button" class="mt-2 text-xs font-semibold text-ink-400 hover:text-ink-700 dark:hover:text-ink-100" @click="toggleCustom(row)">
