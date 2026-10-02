@@ -66,6 +66,15 @@
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ball-500;
   }
+  /* 金額一律手動輸入，不顯示數字欄位的上下箭頭 */
+  input[type='number'] {
+    appearance: textfield;
+  }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
 }
 
 @utility card {

@@ -452,6 +452,40 @@ describe('儲值金', () => {
     expect(simplifyDebts(bal)).toEqual([{ from: 'b', to: 'c', amount: 100 }])
   })
 
+  // 場次只有日期，當天才儲值的錢也要能扣當天那場
+  const local = (y: number, m: number, d: number, h: number, min: number) => new Date(y, m - 1, d, h, min).toISOString()
+
+  it('同一天打球又儲值時，當天那場從儲值扣', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s1', '2026-10-02')],
+      [expense('e1', 's1', 200, 'a', ['a', 'b'])],
+      [topup('b', 'a', 500, local(2026, 10, 2, 13, 57))],
+    )
+    const [w] = wallets(data)
+    expect(w.entries.map((e) => [e.kind, e.delta, e.balance, e.covered])).toEqual([
+      ['topup', 500, 500, undefined],
+      ['session', -100, 400, 100],
+    ])
+    expect(sessionSettlements(data).get('s1')).toBe('direct')
+  })
+
+  it('同一天凌晨的一般轉帳仍依實際時間排在儲值之前', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s0', '2026-09-30'), session('s1', '2026-10-02')],
+      [expense('e0', 's0', 904, 'a', ['a', 'b']), expense('e1', 's1', 200, 'a', ['a', 'b'])],
+      [pay('b', 'a', 452, local(2026, 10, 2, 0, 18)), topup('b', 'a', 500, local(2026, 10, 2, 13, 57))],
+    )
+    const [w] = wallets(data)
+    expect(w.entries.map((e) => [e.kind, e.balance])).toEqual([
+      ['session', -452],
+      ['payment', 0],
+      ['topup', 500],
+      ['session', 400],
+    ])
+  })
+
   it('沒有儲值紀錄時不產生儲值帳，一般預付照舊算要收', () => {
     const data = ledger(['a', 'b'], [], [], [pay('b', 'a', 500, T('2026-09-01'))])
     expect(wallets(data)).toEqual([])

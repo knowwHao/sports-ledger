@@ -145,11 +145,30 @@ export function sessionCoverage(data: CoverageInput, sessionId: Id): PairCoverag
 
 type TimelineEvent = { t: number; order: number; session?: Session; payment?: Payment }
 
-/** 場次以 sessionTime、付款以 paid_at 排序；同一時間點先記費用再記付款，避免當天付款被排到場次之前 */
+function startOfDay(ms: number): number {
+  const d = new Date(ms)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+/**
+ * 場次以 sessionTime、付款以 paid_at 排序；同一時間點先記費用再記付款，避免當天付款被排到場次之前
+ * 場次只有日期，當天有儲值時改排在當天最後一筆儲值之後，當天交給保管人的錢才扣得到當天那場
+ */
 function timeline(sessions: Session[], payments: Payment[]): TimelineEvent[] {
+  const lastTopup = new Map<number, number>()
+  for (const p of payments) {
+    if (p.kind !== 'topup') continue
+    const at = Date.parse(p.paid_at)
+    const day = startOfDay(at)
+    lastTopup.set(day, Math.max(lastTopup.get(day) ?? at, at))
+  }
   const events: TimelineEvent[] = [
-    ...sessions.map((session) => ({ t: sessionTime(session), order: 0, session })),
-    ...payments.map((payment) => ({ t: Date.parse(payment.paid_at), order: 1, payment })),
+    ...sessions.map((session) => {
+      const t = sessionTime(session)
+      return { t: (session.play_date && lastTopup.get(t)) || t, order: 0, session }
+    }),
+    ...payments.map((payment) => ({ t: Date.parse(payment.paid_at), order: payment.kind === 'topup' ? -1 : 1, payment })),
   ]
   return events.sort((a, b) => a.t - b.t || a.order - b.order)
 }
