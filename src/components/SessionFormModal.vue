@@ -35,7 +35,7 @@ const form = reactive({
   location: '',
   note: '',
   attendees: [] as Id[],
-  /** member_id 為空字串表示還沒選是誰帶的 */
+  /** member_id 為空字串表示還沒選是誰的朋友 */
   guests: [] as GuestInput[],
   /** false 時只用 rows[0]，畫面上就是「總金額＋誰付的」 */
   split: false,
@@ -216,7 +216,7 @@ const filledRows = computed(() =>
 const total = computed(() => filledRows.value.reduce((s, x) => s + x.amount, 0))
 const problem = computed(() => {
   if (isOther.value ? !form.title.trim() : !form.play_date) return isOther.value ? '請填寫標題' : '請選擇日期'
-  if (!isOther.value && form.guests.some((g) => !g.member_id)) return '請選擇朋友是誰帶的'
+  if (!isOther.value && form.guests.some((g) => !g.member_id)) return '請選擇是誰的朋友'
   if (!filledRows.value.length) return ''
   if (filledRows.value.some((x) => x.amount > MAX_AMOUNT)) return `單筆金額不可超過 ${formatMoney(MAX_AMOUNT)}`
   if (!parties.value.length) return '先勾選出席的人，費用才能分攤'
@@ -350,15 +350,15 @@ async function submit() {
               <select
                 v-model="g.member_id"
                 class="input min-w-0 flex-1"
-                aria-label="誰帶的"
+                aria-label="誰的朋友"
                 :class="!g.member_id && 'border-amber-400'"
               >
-                <option value="" disabled>誰帶的？</option>
+                <option value="" disabled>誰的朋友？</option>
                 <optgroup v-if="hostOptions(g).attending.length" label="出席的人">
-                  <option v-for="m in hostOptions(g).attending" :key="m.id" :value="m.id">{{ m.name }} 帶的</option>
+                  <option v-for="m in hostOptions(g).attending" :key="m.id" :value="m.id">{{ m.name }} 的朋友</option>
                 </optgroup>
                 <optgroup v-if="hostOptions(g).absent.length" label="沒出席的人（讓朋友代打）">
-                  <option v-for="m in hostOptions(g).absent" :key="m.id" :value="m.id">{{ m.name }} 帶的</option>
+                  <option v-for="m in hostOptions(g).absent" :key="m.id" :value="m.id">{{ m.name }} 的朋友</option>
                 </optgroup>
               </select>
               <div class="flex shrink-0 items-center rounded-2xl border border-ink-200 dark:border-ink-700">
