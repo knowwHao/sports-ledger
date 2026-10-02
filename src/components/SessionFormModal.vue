@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ChevronDown, History, Plus, Trash2 } from 'lucide-vue-next'
+import { ChevronDown, History, Minus, Plus, Trash2, X } from 'lucide-vue-next'
 import ModalSheet from './ModalSheet.vue'
 import MemberPicker from './MemberPicker.vue'
 import MemberAvatar from './MemberAvatar.vue'
-import type { Id, Session } from '@/types'
+import type { GuestInput, Id, Session } from '@/types'
 import { useLedgerStore, type ExpenseRowInput } from '@/stores/ledger'
 import { useWhoAmI } from '@/composables/useWhoAmI'
-import { attendeeIds, OTHER_SPORT } from '@/lib/ledger'
+import { attendeeIds, OTHER_SPORT, partyHeads, sessionGuests } from '@/lib/ledger'
 import { computeDues } from '@/lib/balance'
 import { formatMoney, MAX_AMOUNT, todayYmd } from '@/lib/format'
 import { confirmDialog } from '@/composables/useConfirm'
@@ -35,6 +35,8 @@ const form = reactive({
   location: '',
   note: '',
   attendees: [] as Id[],
+  /** member_id 為空字串表示還沒選是誰帶的 */
+  guests: [] as GuestInput[],
   /** false 時只用 rows[0]，畫面上就是「總金額＋誰付的」 */
   split: false,
   rows: [] as Row[],
@@ -62,7 +64,31 @@ const attendeePool = computed(() => {
   const ids = new Set(form.attendees)
   return ledger.members.filter((m) => m.active || ids.has(m.id))
 })
-const attendeeMembers = computed(() => ledger.members.filter((m) => form.attendees.includes(m.id)))
+const MAX_GUESTS = 20
+/** 年費／雜費沒有帶朋友這回事 */
+const validGuests = computed(() =>
+  isOther.value ? [] : form.guests.filter((g) => g.member_id && g.guests > 0).map((g) => ({ ...g, names: g.names.trim() })),
+)
+const guestTotal = computed(() => validGuests.value.reduce((s, g) => s + g.guests, 0))
+const heads = computed(() => partyHeads(form.attendees, validGuests.value))
+/** 要分攤的成員：出席的人，加上沒出席但帶朋友來的人 */
+const parties = computed(() => [...heads.value.keys()])
+const partyMembers = computed(() => ledger.members.filter((m) => heads.value.has(m.id)))
+/** 每位成員只能有一列，已被其他列選走的不再出現 */
+function hostOptions(g: GuestInput) {
+  const taken = new Set(form.guests.filter((x) => x !== g).map((x) => x.member_id))
+  const pool = ledger.members.filter((m) => (m.active || m.id === g.member_id) && !taken.has(m.id))
+  return {
+    attending: pool.filter((m) => form.attendees.includes(m.id)),
+    absent: pool.filter((m) => !form.attendees.includes(m.id)),
+  }
+}
+function addGuest() {
+  form.guests.push({ member_id: '', guests: 1, names: '' })
+}
+function stepGuest(g: GuestInput, delta: number) {
+  g.guests = Math.min(MAX_GUESTS, Math.max(1, g.guests + delta))
+}
 const main = computed(() => form.rows[0])
 // 付錢的人不一定有出席（例如代訂場地沒來打），所以其他成員也要能選
 const payerPool = computed(() => {
@@ -94,6 +120,7 @@ function pickSport(id: string) {
   form.sportId = id
   if (editing.value) return
   form.attendees = id ? [...lastAttendees.value] : ledger.activeMembers.map((m) => m.id)
+  form.guests = []
   const defaults = id ? ledger.idx.sport(id).default_expenses : []
   const known = defaults.reduce((s, d) => s + (d.amount ?? 0), 0)
   form.rows = [blankRow(singleLabel(id), known || null, defaultPayer(form.attendees))]
@@ -103,10 +130,11 @@ function pickSport(id: string) {
 function loadSession(s: Session) {
   form.sportId = s.sport_id ?? ''
   form.attendees = attendeeIds(ledger.data, s.id)
+  form.guests = sessionGuests(ledger.data, s.id).map(({ member_id, guests, names }) => ({ member_id, guests, names }))
   const expenses = ledger.data.expenses
     .filter((e) => e.session_id === s.id)
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
-  const all = new Set(form.attendees)
+  const all = new Set(parties.value)
   form.rows = expenses.map((e) => {
     const participants = ledger.sharesOf(e.id).map((x) => x.member_id)
     const custom = participants.length !== all.size || participants.some((p) => !all.has(p))
@@ -138,7 +166,7 @@ watch(
 
 function toggleCustom(row: Row) {
   row.custom = !row.custom
-  if (row.custom && !row.participants.length) row.participants = [...form.attendees]
+  if (row.custom && !row.participants.length) row.participants = [...parties.value]
 }
 
 function splitRows() {
@@ -177,7 +205,7 @@ function mergeRows() {
 }
 
 function participantsOf(r: Row): Id[] {
-  return r.custom ? r.participants.filter((id) => form.attendees.includes(id)) : [...form.attendees]
+  return r.custom ? r.participants.filter((id) => heads.value.has(id)) : [...parties.value]
 }
 
 const filledRows = computed(() =>
@@ -188,9 +216,10 @@ const filledRows = computed(() =>
 const total = computed(() => filledRows.value.reduce((s, x) => s + x.amount, 0))
 const problem = computed(() => {
   if (isOther.value ? !form.title.trim() : !form.play_date) return isOther.value ? '請填寫標題' : '請選擇日期'
+  if (!isOther.value && form.guests.some((g) => !g.member_id)) return '請選擇朋友是誰帶的'
   if (!filledRows.value.length) return ''
   if (filledRows.value.some((x) => x.amount > MAX_AMOUNT)) return `單筆金額不可超過 ${formatMoney(MAX_AMOUNT)}`
-  if (!form.attendees.length) return '先勾選出席的人，費用才能分攤'
+  if (!parties.value.length) return '先勾選出席的人，費用才能分攤'
   if (filledRows.value.some((x) => !x.row.payer)) return form.split ? '每筆費用都要選誰付的' : '請選擇誰付的'
   if (form.split && filledRows.value.some((x) => !x.row.label.trim())) return '每筆費用都要有名稱'
   if (filledRows.value.some((x) => !participantsOf(x.row).length)) return '分攤對象至少要有一位出席者'
@@ -202,7 +231,9 @@ const perHead = computed(() => {
   const amount = Math.round(main.value.amount ?? 0)
   const ids = participantsOf(main.value)
   if (amount <= 0 || !ids.length) return null
-  return { ...computeDues(amount, ids), count: ids.length }
+  const guests = validGuests.value.filter((g) => ids.includes(g.member_id)).reduce((s, g) => s + g.guests, 0)
+  const members = ids.filter((id) => form.attendees.includes(id)).length
+  return { ...computeDues(amount, ids, heads.value), members, guests }
 })
 
 function rowInputs(): ExpenseRowInput[] {
@@ -226,7 +257,7 @@ async function submit() {
   }
   const rows = rowInputs()
   if (props.session) {
-    const warnings = ledger.sessionEditWarnings(props.session.id, rows)
+    const warnings = ledger.sessionEditWarnings(props.session.id, form.attendees, validGuests.value, rows)
     if (warnings.length) {
       const ok = await confirmDialog({
         title: '這次修改會影響已記的付款',
@@ -240,11 +271,11 @@ async function submit() {
   saving.value = true
   try {
     if (props.session) {
-      await ledger.saveSessionEdit(props.session.id, input, form.attendees, rows)
+      await ledger.saveSessionEdit(props.session.id, input, form.attendees, validGuests.value, rows)
       toast.success('已儲存修改')
       emit('saved', props.session.id)
     } else {
-      const created = await ledger.createSession(input, form.attendees, rows)
+      const created = await ledger.createSession(input, form.attendees, validGuests.value, rows)
       toast.success(rows.length ? `已記下這場，共 ${formatMoney(total.value)}` : '已新增場次')
       emit('saved', created.id)
     }
@@ -311,6 +342,47 @@ async function submit() {
         <MemberPicker v-model="form.attendees" :members="attendeePool" />
       </div>
 
+      <div v-if="!isOther">
+        <span class="label">帶朋友{{ guestTotal ? `（${guestTotal} 位）` : '' }}</span>
+        <ul v-if="form.guests.length" class="mb-2 space-y-2">
+          <li v-for="(g, i) in form.guests" :key="i" class="rounded-2xl border border-ink-100 p-2.5 dark:border-ink-800">
+            <div class="flex items-center gap-2">
+              <select
+                v-model="g.member_id"
+                class="input min-w-0 flex-1"
+                aria-label="誰帶的"
+                :class="!g.member_id && 'border-amber-400'"
+              >
+                <option value="" disabled>誰帶的？</option>
+                <optgroup v-if="hostOptions(g).attending.length" label="出席的人">
+                  <option v-for="m in hostOptions(g).attending" :key="m.id" :value="m.id">{{ m.name }} 帶的</option>
+                </optgroup>
+                <optgroup v-if="hostOptions(g).absent.length" label="沒出席的人（讓朋友代打）">
+                  <option v-for="m in hostOptions(g).absent" :key="m.id" :value="m.id">{{ m.name }} 帶的</option>
+                </optgroup>
+              </select>
+              <div class="flex shrink-0 items-center rounded-2xl border border-ink-200 dark:border-ink-700">
+                <button type="button" class="icon-btn !size-9" aria-label="少一位" :disabled="g.guests <= 1" @click="stepGuest(g, -1)">
+                  <Minus class="size-4" />
+                </button>
+                <span class="num w-6 text-center font-bold" aria-live="polite">{{ g.guests }}</span>
+                <button type="button" class="icon-btn !size-9" aria-label="多一位" :disabled="g.guests >= MAX_GUESTS" @click="stepGuest(g, 1)">
+                  <Plus class="size-4" />
+                </button>
+              </div>
+              <button type="button" class="icon-btn shrink-0" aria-label="移除這列" @click="form.guests.splice(i, 1)">
+                <X class="size-4" />
+              </button>
+            </div>
+            <input v-model="g.names" class="input mt-2" maxlength="40" placeholder="朋友名字（選填）" aria-label="朋友名字" />
+          </li>
+        </ul>
+        <button type="button" class="btn-ghost !px-3 text-xs" @click="addGuest">
+          <Plus class="size-3.5" />帶朋友
+        </button>
+        <p v-if="guestTotal" class="mt-1.5 text-xs text-ink-400 dark:text-ink-300">朋友和大家一樣平分，那份算在帶他來的人身上</p>
+      </div>
+
       <template v-if="!form.split && main">
         <div>
           <label class="label" for="sf-total">總金額</label>
@@ -326,7 +398,7 @@ async function submit() {
             placeholder="例：1200"
           />
           <p v-if="perHead" class="mt-1.5 text-xs text-ink-400 dark:text-ink-300">
-            {{ perHead.count }} 人平分，每人
+            {{ perHead.members }} 人{{ perHead.guests ? `＋朋友 ${perHead.guests} 位` : '' }}平分，每人
             <span class="num font-bold text-ink-700 dark:text-ink-100">{{ formatMoney(perHead.perHead) }}</span>
             <template v-if="perHead.surplus > 0">（除不盡進位，付錢的人多收 {{ formatMoney(perHead.surplus) }}）</template>
           </p>
@@ -360,7 +432,7 @@ async function submit() {
               <Plus class="size-3.5" />{{ isOther ? '其他人' : '沒出席的人' }}
             </button>
           </div>
-          <p v-if="main.payer && !form.attendees.includes(main.payer)" class="mt-1.5 text-xs text-ink-400 dark:text-ink-300">
+          <p v-if="main.payer && !heads.has(main.payer)" class="mt-1.5 text-xs text-ink-400 dark:text-ink-300">
             {{ ledger.idx.member(main.payer).name }} 只墊錢、不分攤，{{ isOther ? '分攤的人' : '出席的人' }}的錢都付給他
           </p>
         </div>
@@ -406,7 +478,7 @@ async function submit() {
           <button type="button" class="mt-2 text-xs font-semibold text-ink-400 hover:text-ink-700 dark:hover:text-ink-100" @click="toggleCustom(row)">
             {{ row.custom ? `只分給 ${participantsOf(row).length} 人（改回全部出席者）` : '分給全部出席者（改成只分給部分人）' }}
           </button>
-          <MemberPicker v-if="row.custom" v-model="row.participants" class="mt-2" :members="attendeeMembers" />
+          <MemberPicker v-if="row.custom" v-model="row.participants" class="mt-2" :members="partyMembers" />
         </div>
         <button type="button" class="btn-ghost !px-3 text-xs" @click="form.rows.push(blankRow('', null, form.rows[0]?.payer ?? ''))">
           <Plus class="size-3.5" />再加一筆
@@ -447,7 +519,7 @@ async function submit() {
             <button type="button" class="btn-outline !px-3 !py-1.5 text-xs" @click="toggleCustom(main)">
               {{ main.custom ? '改回分給全部出席者' : '只分給部分人' }}
             </button>
-            <MemberPicker v-if="main.custom" v-model="main.participants" :members="attendeeMembers" />
+            <MemberPicker v-if="main.custom" v-model="main.participants" :members="partyMembers" />
           </div>
 
           <div class="space-y-1.5">

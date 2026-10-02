@@ -57,6 +57,7 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 ## 業務規則指標（改之前先讀）
 
 - 每人應付、零頭由墊付者（付錢的人）多收 → README「分攤」、`computeDues`
+- 帶朋友（朋友算一份、記在帶他來的成員身上，可讓朋友代打）→ README「帶朋友」、`computeDues` 的 `heads`、`src/lib/ledger.ts` 的 `partyHeads`
 - 要付／要收（淨額）公式（全隊加總必為 0）→ README「要付／要收（淨額）」、`netBalances`
 - 最少轉帳（貪婪法）→ README「轉帳建議（最少轉帳）」、`simplifyDebts`
 - 結清判定（還沒記費用／當場付清／事後打平）→ README「場次狀態」、`sessionSettlements`／`sessionStatuses`

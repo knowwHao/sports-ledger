@@ -108,6 +108,15 @@ create table if not exists public.attendances (
   primary key (session_id, member_id)
 );
 
+-- 成員帶來的朋友：不建成員，朋友和成員一樣平分，那份算在帶他來的成員身上；成員本人沒出席也可以帶（讓朋友代打）
+create table if not exists public.session_guests (
+  session_id uuid not null references public.sessions (id) on delete cascade,
+  member_id  uuid not null references public.members (id) on delete restrict,
+  guests     int not null check (guests between 1 and 20),
+  names      text not null default '' check (length(names) <= 100),
+  primary key (session_id, member_id)
+);
+
 create table if not exists public.expenses (
   id              uuid primary key default gen_random_uuid(),
   session_id      uuid not null references public.sessions (id) on delete cascade,
@@ -151,6 +160,7 @@ create table if not exists public.member_pins (
 create index if not exists sessions_play_date_idx on public.sessions (play_date);
 create index if not exists sessions_sport_idx on public.sessions (sport_id);
 create index if not exists attendances_member_idx on public.attendances (member_id);
+create index if not exists session_guests_member_idx on public.session_guests (member_id);
 create index if not exists expenses_session_idx on public.expenses (session_id);
 create index if not exists expenses_payer_idx on public.expenses (payer_member_id);
 create index if not exists expense_shares_member_idx on public.expense_shares (member_id);
@@ -402,7 +412,7 @@ create trigger settings_updated_at before update on public.settings
 do $$
 declare t text;
 begin
-  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
+  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'session_guests', 'expenses', 'expense_shares', 'payments'] loop
     execute format('drop trigger if exists touch_updated_at on public.%I', t);
     -- 用 row 層級：statement trigger 在 RLS 擋掉全部列時仍會觸發，帶錯 token 也能改到 updated_at
     execute format(
@@ -418,7 +428,7 @@ $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments', 'member_pins'] loop
+  foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'session_guests', 'expenses', 'expense_shares', 'payments', 'member_pins'] loop
     execute format('alter table public.%I enable row level security', t);
     -- TRUNCATE 不受 RLS 約束，只能靠收回權限擋下
     execute format('revoke truncate, trigger, references on public.%I from anon, authenticated', t);
@@ -428,7 +438,7 @@ begin
          using ((select public.team_token_ok())) with check ((select public.team_token_ok()))', t);
   end loop;
 
-  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
+  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'session_guests', 'expenses', 'expense_shares', 'payments'] loop
     execute format('grant select, insert, update, delete on public.%I to anon, authenticated', t);
   end loop;
 end;

@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type {
   ExpenseInput,
+  GuestInput,
   Id,
   LedgerData,
   Member,
@@ -77,12 +78,13 @@ export class SupabaseRepo implements LedgerRepository {
   }
 
   async loadLedger(): Promise<LedgerData> {
-    const [settings, sports, members, sessions, attendances, expenses, shares, payments] = await Promise.all([
+    const [settings, sports, members, sessions, attendances, guests, expenses, shares, payments] = await Promise.all([
       this.sb.from('settings').select('team_name, updated_at').eq('id', 1).maybeSingle(),
       this.sb.from('sports').select('*').order('sort_order'),
       this.sb.from('members').select('*').order('sort_order'),
       this.sb.from('sessions').select('*'),
       this.sb.from('attendances').select('session_id, member_id'),
+      this.sb.from('session_guests').select('session_id, member_id, guests, names'),
       this.sb.from('expenses').select('*'),
       this.sb.from('expense_shares').select('expense_id, member_id, amount_due'),
       this.sb.from('payments').select('*'),
@@ -97,6 +99,7 @@ export class SupabaseRepo implements LedgerRepository {
       members: check(members),
       sessions: check(sessions),
       attendances: check(attendances),
+      guests: check(guests),
       expenses: check(expenses),
       shares: check(shares),
       payments: check(payments),
@@ -135,10 +138,13 @@ export class SupabaseRepo implements LedgerRepository {
     )
   }
 
-  async createSession(input: SessionInput, attendeeIds: Id[]): Promise<Session> {
+  async createSession(input: SessionInput, attendeeIds: Id[], guests: GuestInput[]): Promise<Session> {
     const session = check(await this.sb.from('sessions').insert(input).select().single()) as Session
     if (attendeeIds.length) {
       check(await this.sb.from('attendances').insert(attendeeIds.map((member_id) => ({ session_id: session.id, member_id }))))
+    }
+    if (guests.length) {
+      check(await this.sb.from('session_guests').insert(guests.map((g) => ({ ...g, session_id: session.id }))))
     }
     return session
   }
@@ -168,6 +174,21 @@ export class SupabaseRepo implements LedgerRepository {
         'ignore',
       )
     }
+  }
+
+  async setGuests(sessionId: Id, guests: GuestInput[]) {
+    // 與 saveExpense 的分攤一樣先 upsert 再刪多餘的；呼叫前已有寫入確認過 token，刪 0 列不需再判定
+    if (guests.length) {
+      check(
+        await this.sb
+          .from('session_guests')
+          .upsert(guests.map((g) => ({ ...g, session_id: sessionId })), { onConflict: 'session_id,member_id' }),
+      )
+    }
+    const keep = guests.map((g) => g.member_id)
+    let del = this.sb.from('session_guests').delete().eq('session_id', sessionId)
+    if (keep.length) del = del.not('member_id', 'in', `(${keep.join(',')})`)
+    check(await del)
   }
 
   async saveExpense(input: ExpenseInput, shares: ShareDue[]) {

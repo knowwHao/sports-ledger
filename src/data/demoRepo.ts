@@ -1,5 +1,6 @@
 import type {
   ExpenseInput,
+  GuestInput,
   Id,
   LedgerData,
   Member,
@@ -58,6 +59,8 @@ export class DemoRepo implements LedgerRepository {
       if (!(Array.isArray(db.payments) && Array.isArray(db.sports) && typeof db.settings?.team_token === 'string')) return null
       // 加入密碼功能前存下的示範資料沒有 pins，與 schema.sql 一樣補上預設 0000
       db.pins ??= {}
+      // 加入帶朋友功能前存下的示範資料沒有 guests
+      db.guests ??= []
       for (const m of db.members) db.pins[m.id] ??= newDemoPin()
       return db
     } catch {
@@ -127,7 +130,7 @@ export class DemoRepo implements LedgerRepository {
 
   async loadLedger(): Promise<LedgerData> {
     this.guard()
-    const { settings, sports, members, sessions, attendances, expenses, shares, payments } = this.db
+    const { settings, sports, members, sessions, attendances, guests, expenses, shares, payments } = this.db
     return this.clone({
       team_name: settings.team_name,
       updated_at: settings.updated_at,
@@ -135,6 +138,7 @@ export class DemoRepo implements LedgerRepository {
       members,
       sessions,
       attendances,
+      guests,
       expenses,
       shares,
       payments,
@@ -197,11 +201,12 @@ export class DemoRepo implements LedgerRepository {
     this.commit()
   }
 
-  async createSession(input: SessionInput, attendeeIds: Id[]): Promise<Session> {
+  async createSession(input: SessionInput, attendeeIds: Id[], guests: GuestInput[]): Promise<Session> {
     this.guard()
     const session: Session = { ...input, id: randomId(), locked: false, created_at: new Date().toISOString() }
     this.db.sessions.push(session)
     attendeeIds.forEach((member_id) => this.db.attendances.push({ session_id: session.id, member_id }))
+    guests.forEach((g) => this.db.guests.push({ ...g, session_id: session.id }))
     this.commit()
     return this.clone(session)
   }
@@ -220,6 +225,7 @@ export class DemoRepo implements LedgerRepository {
     this.db.shares = this.db.shares.filter((s) => !expenseIds.has(s.expense_id))
     this.db.expenses = this.db.expenses.filter((e) => e.session_id !== id)
     this.db.attendances = this.db.attendances.filter((a) => a.session_id !== id)
+    this.db.guests = this.db.guests.filter((g) => g.session_id !== id)
     this.db.payments = this.db.payments.filter((p) => p.session_id !== id)
     this.db.sessions = this.db.sessions.filter((s) => s.id !== id)
     this.commit()
@@ -229,6 +235,13 @@ export class DemoRepo implements LedgerRepository {
     this.guard()
     this.db.attendances = this.db.attendances.filter((a) => a.session_id !== sessionId)
     memberIds.forEach((member_id) => this.db.attendances.push({ session_id: sessionId, member_id }))
+    this.commit()
+  }
+
+  async setGuests(sessionId: Id, guests: GuestInput[]) {
+    this.guard()
+    this.db.guests = this.db.guests.filter((g) => g.session_id !== sessionId)
+    guests.forEach((g) => this.db.guests.push({ ...g, session_id: sessionId }))
     this.commit()
   }
 

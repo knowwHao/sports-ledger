@@ -43,6 +43,17 @@ export interface Attendance {
   member_id: Id
 }
 
+/** 成員帶來的朋友：不建成員，費用算在帶他來的成員身上；成員本人沒出席也可以帶（名額讓給朋友） */
+export interface SessionGuest {
+  session_id: Id
+  member_id: Id
+  guests: number
+  /** 朋友名字，選填 */
+  names: string
+}
+
+export type GuestInput = Pick<SessionGuest, 'member_id' | 'guests' | 'names'>
+
 export interface Expense {
   id: Id
   session_id: Id
@@ -84,6 +95,7 @@ export interface LedgerData {
   members: Member[]
   sessions: Session[]
   attendances: Attendance[]
+  guests: SessionGuest[]
   expenses: Expense[]
   shares: ExpenseShare[]
   payments: Payment[]

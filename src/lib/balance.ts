@@ -21,13 +21,20 @@ export function perHeadAmount(amount: number, headcount: number): number {
   return headcount > 0 ? Math.ceil(amount / headcount) : 0
 }
 
-export function computeDues(amount: number, participantIds: Id[]): DueSplit {
-  const ids = [...new Set(participantIds)]
-  const perHead = perHeadAmount(amount, ids.length)
+/**
+ * heads：每位成員要付幾人份（本人出席算 1，帶的朋友各算 1），沒列到的算 1；0 份的人不列入分攤
+ * 每人份金額以總人份進位，成員應付＝每人份金額 × 他的人份
+ */
+export function computeDues(amount: number, participantIds: Id[], heads?: Map<Id, number>): DueSplit {
+  const parties = [...new Set(participantIds)]
+    .map((member_id) => ({ member_id, n: heads?.get(member_id) ?? 1 }))
+    .filter((p) => p.n > 0)
+  const total = parties.reduce((s, p) => s + p.n, 0)
+  const perHead = perHeadAmount(amount, total)
   return {
-    shares: ids.map((member_id) => ({ member_id, amount_due: perHead })),
+    shares: parties.map((p) => ({ member_id: p.member_id, amount_due: perHead * p.n })),
     perHead,
-    surplus: ids.length ? perHead * ids.length - amount : 0,
+    surplus: total ? perHead * total - amount : 0,
   }
 }
 

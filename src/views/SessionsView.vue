@@ -9,7 +9,7 @@ import EmptyState from '@/components/EmptyState.vue'
 import SkeletonList from '@/components/SkeletonList.vue'
 import SportFilter from '@/components/SportFilter.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
-import { attendeeIds } from '@/lib/ledger'
+import { attendeeIds, sessionGuests } from '@/lib/ledger'
 import { formatDate, monthLabel, sessionMonthKey } from '@/lib/format'
 import type { Session } from '@/types'
 
@@ -41,6 +41,7 @@ function onCreated(id: string) {
 
 function haystack(s: Session): string {
   const names = attendeeIds(ledger.data, s.id).map((id) => ledger.idx.member(id).name)
+  for (const g of sessionGuests(ledger.data, s.id)) names.push(ledger.idx.member(g.member_id).name, g.names)
   const sportName = ledger.idx.sport(s.sport_id).name
   return [s.title, s.location, s.note, sportName, s.play_date && formatDate(s.play_date), ...names]
     .filter(Boolean)

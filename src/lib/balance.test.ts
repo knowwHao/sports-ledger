@@ -70,6 +70,47 @@ describe('computeDues', () => {
     expect(r.perHead).toBe(334)
     expect(r.surplus).toBe(2)
   })
+
+  it('帶朋友的人多付朋友那幾份，朋友和成員一樣平分', () => {
+    const r = computeDues(1000, ['a', 'b', 'c'], new Map([['a', 2]]))
+    expect(r.perHead).toBe(250)
+    expect(r.shares).toEqual([
+      { member_id: 'a', amount_due: 500 },
+      { member_id: 'b', amount_due: 250 },
+      { member_id: 'c', amount_due: 250 },
+    ])
+    expect(r.surplus).toBe(0)
+  })
+
+  it('帶朋友時以總份數進位，零頭仍由墊付者多收', () => {
+    const r = computeDues(1000, ['a', 'b'], new Map([['b', 2]]))
+    expect(r.perHead).toBe(334)
+    expect(r.shares.map((s) => s.amount_due)).toEqual([334, 668])
+    expect(r.surplus).toBe(2)
+  })
+
+  it('本人沒來只帶朋友時只付朋友那份，0 份的人不列入分攤', () => {
+    const r = computeDues(900, ['a', 'b', 'c'], new Map([['b', 1], ['c', 0]]))
+    expect(r.perHead).toBe(450)
+    expect(r.shares).toEqual([
+      { member_id: 'a', amount_due: 450 },
+      { member_id: 'b', amount_due: 450 },
+    ])
+  })
+
+  it('帶朋友的分攤在淨額與結清判定上和一般分攤一樣', () => {
+    const e: Expense = { id: 'e1', session_id: 's1', label: 'e1', amount: 1200, payer_member_id: 'a', created_at: '' }
+    const shares = computeDues(1200, ['a', 'b', 'c'], new Map([['b', 2]])).shares.map((s) => ({ ...s, expense_id: 'e1' }))
+    const data: StatusInput = {
+      members: ['a', 'b', 'c'].map(member),
+      sessions: [session('s1', '2026-09-01')],
+      expenses: [e],
+      shares,
+      payments: [pay('b', 'a', 600, '2026-09-02T00:00:00.000Z', 's1')],
+    }
+    expect(Object.fromEntries(netBalances(data))).toEqual({ a: 300, b: 0, c: -300 })
+    expect(sessionCoverage(data, 's1').find((p) => p.member_id === 'b')).toMatchObject({ due: 600, paid: 600 })
+  })
 })
 
 describe('netBalances', () => {

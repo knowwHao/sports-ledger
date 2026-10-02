@@ -14,7 +14,7 @@ import { useLedgerReady } from '@/composables/useLedgerReady'
 import { useWhoAmI } from '@/composables/useWhoAmI'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
-import { attendeeIds, sessionTotals } from '@/lib/ledger'
+import { attendeeIds, guestLabel, sessionGuests, sessionHeads, sessionTotals } from '@/lib/ledger'
 import { computeDues, sessionCoverage, type PairCoverage } from '@/lib/balance'
 import { formatDate, formatMoney, sessionTitle } from '@/lib/format'
 import type { Expense, Id, Member, PaymentPreset } from '@/types'
@@ -31,6 +31,12 @@ const locked = computed(() => !!session.value?.locked)
 const isFee = computed(() => !session.value?.play_date)
 
 const attendees = computed(() => attendeeIds(ledger.data, sessionId.value).map((id) => ledger.idx.member(id)))
+const guests = computed(() => sessionGuests(ledger.data, sessionId.value))
+const heads = computed(() => sessionHeads(ledger.data, sessionId.value))
+function guestNote(memberId: Id): string {
+  const g = guests.value.find((x) => x.member_id === memberId)
+  return g ? guestLabel(g, attendees.value.some((m) => m.id === memberId)) : ''
+}
 const expenses = computed(() =>
   ledger.data.expenses
     .filter((e) => e.session_id === sessionId.value)
@@ -83,8 +89,10 @@ const payers = computed(() => {
 
 function expenseInfo(e: Expense) {
   const shares = ledger.sharesOf(e.id)
-  const { perHead, surplus } = computeDues(e.amount, shares.map((s) => s.member_id))
-  return { count: shares.length, perHead, surplus, payer: ledger.idx.member(e.payer_member_id) }
+  const ids = shares.map((s) => s.member_id)
+  const { perHead, surplus } = computeDues(e.amount, ids, heads.value)
+  const count = ids.reduce((s, id) => s + (heads.value.get(id) ?? 1), 0)
+  return { count, perHead, surplus, payer: ledger.idx.member(e.payer_member_id) }
 }
 
 
@@ -273,6 +281,7 @@ async function removeSession() {
                   <p class="truncate font-semibold">{{ row.member.name }}</p>
                   <p class="text-xs text-ink-400 dark:text-ink-300">
                     應付 <span class="num font-semibold">{{ formatMoney(row.due) }}</span>
+                    <template v-if="guestNote(row.member.id)"> · {{ guestNote(row.member.id) }}</template>
                     <template v-if="row.paid > 0 && row.paid < row.due && !row.netted"> · 已付 {{ formatMoney(row.paid) }}</template>
                   </p>
                 </div>
@@ -336,12 +345,20 @@ async function removeSession() {
             <span class="text-ink-400">總金額</span>
             <span class="num font-black">{{ formatMoney(totals.total) }}</span>
           </div>
-          <h3 class="section-title mt-5 mb-2">{{ isFee ? '分攤的人' : '出席' }}（{{ attendees.length }}）</h3>
+          <h3 class="section-title mt-5 mb-2">
+            {{ isFee ? '分攤的人' : '出席' }}（{{ attendees.length }}{{ totals.guestCount ? `＋朋友 ${totals.guestCount}` : '' }}）
+          </h3>
           <div class="flex flex-wrap gap-1.5">
             <span v-for="m in attendees" :key="m.id" class="chip-muted !py-1 !pl-1">
               <MemberAvatar :name="m.name" :color="m.color" size="xs" :muted="!m.active" />{{ m.name }}
             </span>
           </div>
+          <ul v-if="guests.length" class="mt-2 space-y-1 text-xs text-ink-400 dark:text-ink-300">
+            <li v-for="g in guests" :key="g.member_id">
+              <span class="font-semibold text-ink-600 dark:text-ink-200">{{ ledger.idx.member(g.member_id).name }}</span>
+              {{ guestNote(g.member_id) }}
+            </li>
+          </ul>
         </section>
       </div>
 

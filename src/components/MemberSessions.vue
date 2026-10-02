@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { Check } from 'lucide-vue-next'
 import SportBadge from './SportBadge.vue'
 import type { Id, LedgerData } from '@/types'
-import { indexLedger, memberLines } from '@/lib/ledger'
+import { guestLabel, indexLedger, memberLines } from '@/lib/ledger'
 import { sessionCoverage, type PairCoverage, type SettleReason } from '@/lib/balance'
 import { formatMoney, sessionSortKey, sessionSubtitle, sessionTitle } from '@/lib/format'
 
@@ -20,6 +20,12 @@ const props = defineProps<{
 const emit = defineEmits<{ pay: [pair: PairCoverage, sessionId: Id]; open: [sessionId: Id] }>()
 
 const idx = computed(() => indexLedger(props.data))
+
+function guestNoteOf(sessionId: Id): string {
+  const g = props.data.guests.find((x) => x.session_id === sessionId && x.member_id === props.memberId)
+  if (!g) return ''
+  return guestLabel(g, props.data.attendances.some((a) => a.session_id === sessionId && a.member_id === props.memberId))
+}
 
 const groups = computed(() => {
   const map = new Map<Id, ReturnType<typeof memberLines>>()
@@ -38,6 +44,7 @@ const groups = computed(() => {
       advanced: advancedAll.filter((e) => e.session_id === session.id),
       settled: props.settlements.get(session.id),
       netted: !!props.netted.get(session.id)?.has(props.memberId),
+      guestNote: guestNoteOf(session.id),
     }))
 })
 </script>
@@ -55,6 +62,7 @@ const groups = computed(() => {
         <span v-if="g.settled" class="chip-done shrink-0">已付清</span>
         <span v-else class="chip-open shrink-0">未付清</span>
       </button>
+      <p v-if="g.guestNote" class="px-4 pb-1 text-xs text-ink-400 dark:text-ink-300">{{ g.guestNote }}</p>
       <ul class="space-y-1 px-4 pb-2 text-sm">
         <li v-for="l in g.lines" :key="l.expense.id" class="flex justify-between gap-3 text-ink-500 dark:text-ink-300">
           <span class="truncate">{{ l.expense.label }}<template v-if="l.isPayer">（自己付的）</template></span>
