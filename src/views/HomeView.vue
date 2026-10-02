@@ -8,13 +8,14 @@ import MemberAvatar from '@/components/MemberAvatar.vue'
 import SessionStatusChip from '@/components/SessionStatusChip.vue'
 import SessionFormModal from '@/components/SessionFormModal.vue'
 import TransferModal from '@/components/TransferModal.vue'
+import PaymentModal from '@/components/PaymentModal.vue'
 import WalletCard from '@/components/WalletCard.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
 import { askLogin, useWhoAmI } from '@/composables/useWhoAmI'
 import { sessionTotals, walletCredit, walletsHeldBy, walletsOf } from '@/lib/ledger'
 import { formatDate, formatMoney, sessionTitle } from '@/lib/format'
 import type { Transfer } from '@/lib/balance'
-import type { Session } from '@/types'
+import type { PaymentPreset, Session } from '@/types'
 
 const ledger = useLedgerReady()
 const me = useWhoAmI()
@@ -22,6 +23,7 @@ const router = useRouter()
 
 const showForm = ref(false)
 const confirming = ref<Transfer | null>(null)
+const topup = ref<PaymentPreset | null>(null)
 
 const meMember = computed(() => ledger.activeMembers.find((m) => m.id === me.value) ?? null)
 const balance = computed(() => (meMember.value ? (ledger.summary.balances.get(meMember.value.id) ?? 0) : 0))
@@ -76,7 +78,13 @@ function onCreated(id: string) {
           </div>
         </section>
 
-        <WalletCard v-if="meMember" :member-id="meMember.id" :wallets="myWallets" :member="ledger.idx.member" />
+        <WalletCard
+          v-if="meMember"
+          :member-id="meMember.id"
+          :wallets="myWallets"
+          :member="ledger.idx.member"
+          @topup="topup = { kind: 'topup' }"
+        />
 
         <section
           v-if="meMember"
@@ -181,5 +189,6 @@ function onCreated(id: string) {
 
     <SessionFormModal :open="showForm" @close="showForm = false" @saved="onCreated" />
     <TransferModal :transfer="confirming" @close="confirming = null" />
+    <PaymentModal :open="!!topup" :preset="topup" @close="topup = null" />
   </div>
 </template>

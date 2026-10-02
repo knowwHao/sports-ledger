@@ -77,7 +77,7 @@ async function submit() {
       <div>
         <label class="label" for="pm-from">{{ isTopup ? '儲值的人' : '付款人' }}</label>
         <select id="pm-from" v-model="form.from" class="input" :disabled="preset?.fixedParties" required>
-          <option value="" disabled>選擇付款人</option>
+          <option value="" disabled>{{ isTopup ? '選擇儲值的人' : '選擇付款人' }}</option>
           <option v-for="m in people" :key="m.id" :value="m.id">{{ m.name }}</option>
         </select>
       </div>
