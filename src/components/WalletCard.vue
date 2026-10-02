@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ChevronRight } from 'lucide-vue-next'
+import { ChevronRight, Plus } from 'lucide-vue-next'
 import type { Id, Member } from '@/types'
 import type { Wallet } from '@/lib/balance'
 import { walletCredit } from '@/lib/ledger'
 import { formatMoney } from '@/lib/format'
 
 const props = defineProps<{ memberId: Id; wallets: Wallet[]; member: (id: Id) => Member }>()
+/** 記錄別人儲值給自己（自己是保管人） */
+const emit = defineEmits<{ topup: [] }>()
 
 const total = computed(() => props.wallets.reduce((s, w) => s + walletCredit(w), 0))
 // 餘額歸 0 的保管人不顯示，不足的部分在「我的帳」以欠款呈現
@@ -26,7 +28,12 @@ const historyLink = (holder?: Id) => ({ path: `/members/${props.memberId}/wallet
         儲值紀錄<ChevronRight class="size-4" />
       </RouterLink>
     </div>
-    <p class="num mt-1 text-4xl font-black tracking-tight">{{ formatMoney(total) }}</p>
+    <div class="mt-1 flex items-center justify-between gap-3">
+      <p class="num min-w-0 truncate text-4xl font-black tracking-tight">{{ formatMoney(total) }}</p>
+      <button type="button" class="btn-outline shrink-0 !px-3 !py-1.5 text-xs" @click="emit('topup')">
+        <Plus class="size-3.5" />記錄儲值
+      </button>
+    </div>
     <p v-if="holders.length === 1" class="mt-1 text-sm text-ink-500 dark:text-ink-300">
       保管人：{{ member(holders[0].holder).name }}
     </p>
