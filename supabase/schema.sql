@@ -108,6 +108,15 @@ create table if not exists public.attendances (
   primary key (session_id, member_id)
 );
 
+-- 成員帶來的朋友：不建成員，朋友和成員一樣平分，那份算在帶他來的成員身上；成員本人沒出席也可以帶（讓朋友代打）
+create table if not exists public.session_guests (
+  session_id uuid not null references public.sessions (id) on delete cascade,
+  member_id  uuid not null references public.members (id) on delete restrict,
+  guests     int not null check (guests between 1 and 20),
+  names      text not null default '' check (length(names) <= 100),
+  primary key (session_id, member_id)
+);
+
 create table if not exists public.expenses (
   id              uuid primary key default gen_random_uuid(),
   session_id      uuid not null references public.sessions (id) on delete cascade,
@@ -133,9 +142,17 @@ create table if not exists public.payments (
   -- 刪除場次時一併刪除該場的直接付款，與前端確認視窗的說明一致
   session_id     uuid references public.sessions (id) on delete cascade,
   note           text not null default '',
+  -- topup＝儲值：先放在保管人那裡，之後他墊付的費用依時間先後扣，見前端 balance.ts 的 wallets()
+  kind           text not null default 'payment' check (kind in ('payment', 'topup')),
   created_at     timestamptz not null default now(),
   constraint payments_distinct_parties check (from_member_id <> to_member_id)
 );
+-- 舊版 payments 沒有 kind，既有付款都是一般付款
+alter table public.payments
+  add column if not exists kind text not null default 'payment' check (kind in ('payment', 'topup'));
+alter table public.payments drop constraint if exists payments_topup_no_session;
+alter table public.payments
+  add constraint payments_topup_no_session check (kind = 'payment' or session_id is null);
 
 -- 成員密碼：只存加鹽雜湊，anon／authenticated 完全沒有權限，只能經由下方的 RPC 驗證與修改
 -- session_key 是登入成功後發給裝置的憑證，記付款時帶上；改密碼會換發，其他裝置隨之登出
@@ -151,6 +168,7 @@ create table if not exists public.member_pins (
 create index if not exists sessions_play_date_idx on public.sessions (play_date);
 create index if not exists sessions_sport_idx on public.sessions (sport_id);
 create index if not exists attendances_member_idx on public.attendances (member_id);
+create index if not exists session_guests_member_idx on public.session_guests (member_id);
 create index if not exists expenses_session_idx on public.expenses (session_id);
 create index if not exists expenses_payer_idx on public.expenses (payer_member_id);
 create index if not exists expense_shares_member_idx on public.expense_shares (member_id);
@@ -329,9 +347,12 @@ begin
 end;
 $$;
 
--- 只有收款人能記付款：收款人一律是登入的成員本人
+-- 只有收款人能記付款：收款人一律是登入的成員本人；儲值也一樣由收到錢的保管人記
+-- 加 p_kind 前的舊版簽章要先刪掉，否則會留下一個不能記儲值的同名函式
+drop function if exists public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text);
 create or replace function public.create_payment(
-  p_member uuid, p_key text, p_from uuid, p_amount int, p_paid_at timestamptz, p_session uuid, p_note text)
+  p_member uuid, p_key text, p_from uuid, p_amount int, p_paid_at timestamptz, p_session uuid, p_note text,
+  p_kind text default 'payment')
 returns uuid
 language plpgsql
 volatile
@@ -342,8 +363,8 @@ declare
   new_id uuid;
 begin
   perform public.require_member(p_member, p_key);
-  insert into public.payments (from_member_id, to_member_id, amount, paid_at, session_id, note)
-  values (p_from, p_member, p_amount, coalesce(p_paid_at, now()), p_session, coalesce(p_note, ''))
+  insert into public.payments (from_member_id, to_member_id, amount, paid_at, session_id, note, kind)
+  values (p_from, p_member, p_amount, coalesce(p_paid_at, now()), p_session, coalesce(p_note, ''), coalesce(p_kind, 'payment'))
   returning id into new_id;
   return new_id;
 end;
@@ -402,7 +423,7 @@ create trigger settings_updated_at before update on public.settings
 do $$
 declare t text;
 begin
-  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
+  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'session_guests', 'expenses', 'expense_shares', 'payments'] loop
     execute format('drop trigger if exists touch_updated_at on public.%I', t);
     -- 用 row 層級：statement trigger 在 RLS 擋掉全部列時仍會觸發，帶錯 token 也能改到 updated_at
     execute format(
@@ -418,7 +439,7 @@ $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments', 'member_pins'] loop
+  foreach t in array array['settings', 'sports', 'members', 'sessions', 'attendances', 'session_guests', 'expenses', 'expense_shares', 'payments', 'member_pins'] loop
     execute format('alter table public.%I enable row level security', t);
     -- TRUNCATE 不受 RLS 約束，只能靠收回權限擋下
     execute format('revoke truncate, trigger, references on public.%I from anon, authenticated', t);
@@ -428,7 +449,7 @@ begin
          using ((select public.team_token_ok())) with check ((select public.team_token_ok()))', t);
   end loop;
 
-  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'expenses', 'expense_shares', 'payments'] loop
+  foreach t in array array['sports', 'members', 'sessions', 'attendances', 'session_guests', 'expenses', 'expense_shares', 'payments'] loop
     execute format('grant select, insert, update, delete on public.%I to anon, authenticated', t);
   end loop;
 end;
@@ -488,7 +509,7 @@ revoke execute on function public.member_change_pin(uuid, text, text) from publi
 grant execute on function public.member_change_pin(uuid, text, text) to anon, authenticated;
 revoke execute on function public.create_members(jsonb, text) from public;
 grant execute on function public.create_members(jsonb, text) to anon, authenticated;
-revoke execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text) from public;
-grant execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text) to anon, authenticated;
+revoke execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text, text) from public;
+grant execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text, text) to anon, authenticated;
 revoke execute on function public.delete_payments(uuid, text, uuid[]) from public;
 grant execute on function public.delete_payments(uuid, text, uuid[]) to anon, authenticated;

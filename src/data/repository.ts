@@ -1,5 +1,6 @@
 import type {
   ExpenseInput,
+  GuestInput,
   Id,
   LedgerData,
   Member,
@@ -63,10 +64,12 @@ export interface LedgerRepository {
   updateMember(id: Id, patch: MemberPatch): Promise<void>
   reorderMembers(orderedIds: Id[]): Promise<void>
 
-  createSession(input: SessionInput, attendeeIds: Id[]): Promise<Session>
+  createSession(input: SessionInput, attendeeIds: Id[], guests: GuestInput[]): Promise<Session>
   updateSession(id: Id, patch: SessionPatch): Promise<void>
   deleteSession(id: Id): Promise<void>
   setAttendance(sessionId: Id, memberIds: Id[]): Promise<void>
+  /** 以 guests 完整取代這場帶朋友的紀錄 */
+  setGuests(sessionId: Id, guests: GuestInput[]): Promise<void>
 
   /** 寫入費用並以 shares 完整取代其分攤紀錄 */
   saveExpense(input: ExpenseInput, shares: ShareDue[]): Promise<Id>

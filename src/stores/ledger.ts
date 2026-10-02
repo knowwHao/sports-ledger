@@ -2,9 +2,9 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { repo } from '@/data'
 import { InvalidTokenError, MemberSessionError, type SessionPatch, type SportPatch } from '@/data/repository'
-import type { Expense, ExpenseShare, Id, LedgerData, Member, MemberSession, PaymentInput, SessionInput, SportInput } from '@/types'
+import type { Expense, ExpenseShare, GuestInput, Id, LedgerData, Member, MemberSession, PaymentInput, SessionInput, SportInput } from '@/types'
 import { computeDues, sessionCoverage, type Transfer } from '@/lib/balance'
-import { attendeeIds, indexLedger, sortedMembers, sortedSessions, sortedSports, summarize } from '@/lib/ledger'
+import { attendeeIds, indexLedger, partyHeads, sessionGuests, sortedMembers, sortedSessions, sortedSports, summarize } from '@/lib/ledger'
 import { formatMoney } from '@/lib/format'
 import { pickColor } from '@/lib/avatar'
 import { useAccessStore } from './access'
@@ -26,6 +26,7 @@ const EMPTY: LedgerData = {
   members: [],
   sessions: [],
   attendances: [],
+  guests: [],
   expenses: [],
   shares: [],
   payments: [],
@@ -36,6 +37,9 @@ function sameSet(a: Id[], b: Id[]) {
   const s = new Set(a)
   return b.every((x) => s.has(x))
 }
+
+const shareKey = (s: { member_id: Id; amount_due: number }) => `${s.member_id}:${s.amount_due}`
+const guestKey = (g: GuestInput) => `${g.member_id}:${g.guests}:${g.names}`
 
 export const useLedgerStore = defineStore('ledger', () => {
   const data = ref<LedgerData>(EMPTY)
@@ -173,50 +177,57 @@ export const useLedgerStore = defineStore('ledger', () => {
     return last ? attendeeIds(data.value, last.id) : []
   }
 
-  async function createSession(input: SessionInput, attendees: Id[], rows: ExpenseRowInput[] = []) {
+  async function createSession(input: SessionInput, attendees: Id[], guests: GuestInput[], rows: ExpenseRowInput[] = []) {
+    const heads = partyHeads(attendees, guests)
     return mutate(async () => {
-      const session = await repo.createSession(input, attendees)
+      const session = await repo.createSession(input, attendees, guests)
       for (const { label, amount, payer_member_id, participantIds } of rows) {
         await repo.saveExpense(
           { session_id: session.id, label, amount, payer_member_id },
-          computeDues(amount, participantIds).shares,
+          computeDues(amount, participantIds, heads).shares,
         )
       }
       return session
     })
   }
 
-  /** 假設把這場的費用整批換成 rows，列出會受影響的當場付款 */
-  function sessionEditWarnings(sessionId: Id, rows: ExpenseRowInput[]): string[] {
+  /** 假設把這場的出席、朋友與費用整批換掉，列出會受影響的當場付款 */
+  function sessionEditWarnings(sessionId: Id, attendees: Id[], guests: GuestInput[], rows: ExpenseRowInput[]): string[] {
+    const heads = partyHeads(attendees, guests)
     const expenses: Expense[] = []
     const shares: ExpenseShare[] = []
     rows.forEach((r, i) => {
       const id = r.id ?? `__draft${i}`
       expenses.push({ id, session_id: sessionId, label: r.label, amount: r.amount, payer_member_id: r.payer_member_id, created_at: '' })
-      for (const s of computeDues(r.amount, r.participantIds).shares) shares.push({ ...s, expense_id: id })
+      for (const s of computeDues(r.amount, r.participantIds, heads).shares) shares.push({ ...s, expense_id: id })
     })
     return coverageWarnings(sessionId, expenses, shares)
   }
 
-  /** 一次更新場次資訊、出席與整批費用；rows 沒列到的既有費用會被刪除 */
-  async function saveSessionEdit(id: Id, input: SessionInput, attendees: Id[], rows: ExpenseRowInput[]) {
+  /** 一次更新場次資訊、出席、朋友與整批費用；rows 沒列到的既有費用會被刪除 */
+  async function saveSessionEdit(id: Id, input: SessionInput, attendees: Id[], guests: GuestInput[], rows: ExpenseRowInput[]) {
     const existing = data.value.expenses.filter((e) => e.session_id === id)
     const keep = new Set(rows.map((r) => r.id).filter(Boolean))
+    const heads = partyHeads(attendees, guests)
+    const guestsChanged = !sameSet(sessionGuests(data.value, id).map(guestKey), guests.map(guestKey))
     await mutate(async () => {
       await repo.updateSession(id, input)
       if (!sameSet(attendeeIds(data.value, id), attendees)) await repo.setAttendance(id, attendees)
+      if (guestsChanged) await repo.setGuests(id, guests)
       for (const e of existing) if (!keep.has(e.id)) await repo.deleteExpense(e.id)
       for (const r of rows) {
+        const { label, amount, payer_member_id, participantIds } = r
+        const shares = computeDues(amount, participantIds, heads).shares
         const old = r.id ? existing.find((e) => e.id === r.id) : undefined
+        // 朋友人數改了時分攤名單不變但金額會變，所以比對的是每人應付
         const unchanged =
           old &&
-          old.label === r.label &&
-          old.amount === r.amount &&
-          old.payer_member_id === r.payer_member_id &&
-          sameSet(sharesOf(old.id).map((s) => s.member_id), r.participantIds)
+          old.label === label &&
+          old.amount === amount &&
+          old.payer_member_id === payer_member_id &&
+          sameSet(sharesOf(old.id).map(shareKey), shares.map(shareKey))
         if (unchanged) continue
-        const { label, amount, payer_member_id, participantIds } = r
-        await repo.saveExpense({ id: r.id, session_id: id, label, amount, payer_member_id }, computeDues(amount, participantIds).shares)
+        await repo.saveExpense({ id: r.id, session_id: id, label, amount, payer_member_id }, shares)
       }
     })
   }
@@ -246,6 +257,7 @@ export const useLedgerStore = defineStore('ledger', () => {
   async function createPayment(input: PaymentInput) {
     if (input.amount <= 0) throw new Error('金額必須大於 0')
     if (input.from_member_id === currentSession()?.memberId) throw new Error('付款人與收款人不能是同一人')
+    if (input.kind === 'topup' && input.session_id) throw new Error('儲值不能指定場次')
     await asPayee(null, (auth) => repo.createPayment(auth, input))
   }
 
@@ -262,6 +274,7 @@ export const useLedgerStore = defineStore('ledger', () => {
         paid_at: new Date().toISOString(),
         session_id: null,
         note: '轉帳建議',
+        kind: 'payment',
       }),
     )
   }
@@ -274,6 +287,7 @@ export const useLedgerStore = defineStore('ledger', () => {
         paid_at: new Date().toISOString(),
         session_id: sessionId,
         note: '',
+        kind: 'payment',
       }),
     )
   }

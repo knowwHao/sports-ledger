@@ -56,6 +56,9 @@ const day = computed(() => (props.session.play_date ? parseDate(props.session.pl
           class="num inline-flex size-6 items-center justify-center rounded-full bg-ink-100 text-[10px] font-bold text-ink-500 ring-2 ring-white dark:bg-ink-800 dark:text-ink-300 dark:ring-ink-900"
           >+{{ attendees.length - 7 }}</span
         >
+        <span v-if="totals.guestCount" class="ml-3 self-center text-[11px] font-semibold whitespace-nowrap text-ink-400 dark:text-ink-300">
+          ＋朋友 {{ totals.guestCount }}
+        </span>
       </div>
     </div>
     <div class="shrink-0 text-right">

@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
-import { ArrowRight, CalendarPlus, ChevronRight, Plus, Users } from 'lucide-vue-next'
+import { ArrowRight, CalendarPlus, ChevronRight, PiggyBank, Plus, Users } from 'lucide-vue-next'
 import EmptyState from '@/components/EmptyState.vue'
 import SkeletonList from '@/components/SkeletonList.vue'
 import MemberAvatar from '@/components/MemberAvatar.vue'
 import SessionStatusChip from '@/components/SessionStatusChip.vue'
 import SessionFormModal from '@/components/SessionFormModal.vue'
 import TransferModal from '@/components/TransferModal.vue'
+import WalletCard from '@/components/WalletCard.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
 import { askLogin, useWhoAmI } from '@/composables/useWhoAmI'
-import { sessionTotals } from '@/lib/ledger'
+import { sessionTotals, walletCredit, walletsHeldBy, walletsOf } from '@/lib/ledger'
 import { formatDate, formatMoney, sessionTitle } from '@/lib/format'
 import type { Transfer } from '@/lib/balance'
 import type { Session } from '@/types'
@@ -27,6 +28,9 @@ const balance = computed(() => (meMember.value ? (ledger.summary.balances.get(me
 const toPay = computed(() => ledger.summary.transfers.filter((t) => t.from === meMember.value?.id))
 const toReceive = computed(() => ledger.summary.transfers.filter((t) => t.to === meMember.value?.id))
 const recent = computed(() => ledger.sessions.slice(0, 5))
+const myWallets = computed(() => (meMember.value ? walletsOf(ledger.summary.wallets, meMember.value.id) : []))
+const held = computed(() => (meMember.value ? walletsHeldBy(ledger.summary.wallets, meMember.value.id) : []))
+const heldTotal = computed(() => held.value.reduce((s, w) => s + walletCredit(w), 0))
 
 function sessionLine(s: Session) {
   const sport = ledger.idx.sport(s.sport_id)
@@ -72,8 +76,10 @@ function onCreated(id: string) {
           </div>
         </section>
 
+        <WalletCard v-if="meMember && myWallets.length" :member-id="meMember.id" :wallets="myWallets" :member="ledger.idx.member" />
+
         <section
-          v-else
+          v-if="meMember"
           class="relative overflow-clip rounded-[2rem] bg-ink-900 p-6 text-white shadow-lift sm:p-7 dark:bg-ink-800"
         >
           <div class="absolute -top-16 -right-10 size-48 rounded-full bg-ball-400/25 blur-3xl" aria-hidden="true" />
@@ -112,6 +118,22 @@ function onCreated(id: string) {
             <p v-else class="mt-2 text-2xl font-black">你目前沒有待結清的帳 🎉</p>
           </div>
         </section>
+
+        <RouterLink
+          v-if="meMember && held.length"
+          :to="`/members/${meMember.id}/held`"
+          class="card flex items-center gap-3 p-4 transition hover:bg-ink-50 dark:hover:bg-ink-800/60"
+        >
+          <span class="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-ball-200/70 text-ink-900 dark:bg-ball-400/15 dark:text-ball-200">
+            <PiggyBank class="size-5" />
+          </span>
+          <div class="min-w-0 flex-1">
+            <p class="font-semibold">我保管的儲值</p>
+            <p class="text-xs text-ink-400 dark:text-ink-300">{{ held.length }} 人儲值在你這裡，是大家的錢、不是要收的錢</p>
+          </div>
+          <span class="num shrink-0 font-black">{{ formatMoney(heldTotal) }}</span>
+          <ChevronRight class="size-4 shrink-0 text-ink-300" />
+        </RouterLink>
 
         <button type="button" class="btn-primary w-full !py-3.5 text-base" @click="showForm = true">
           <Plus class="size-5" />記一場

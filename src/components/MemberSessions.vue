@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { Check } from 'lucide-vue-next'
 import SportBadge from './SportBadge.vue'
 import type { Id, LedgerData } from '@/types'
-import { indexLedger, memberLines } from '@/lib/ledger'
+import { guestLabel, indexLedger, memberLines } from '@/lib/ledger'
 import { sessionCoverage, type PairCoverage, type SettleReason } from '@/lib/balance'
 import { formatMoney, sessionSortKey, sessionSubtitle, sessionTitle } from '@/lib/format'
 
@@ -13,6 +13,8 @@ const props = defineProps<{
   settlements: Map<Id, SettleReason>
   /** 各場已個人事後打平的欠款者 */
   netted: Map<Id, Set<Id>>
+  /** 各場由儲值付掉的金額，key 為 `場次|成員|保管人` */
+  walletCovered: Map<string, number>
   /** 只有收款人本人能標記已付 */
   canPay?: (p: PairCoverage) => boolean
   busy?: string | null
@@ -20,6 +22,14 @@ const props = defineProps<{
 const emit = defineEmits<{ pay: [pair: PairCoverage, sessionId: Id]; open: [sessionId: Id] }>()
 
 const idx = computed(() => indexLedger(props.data))
+
+const covered = (sessionId: Id, p: PairCoverage) => props.walletCovered.get(`${sessionId}|${p.member_id}|${p.payer_id}`) ?? 0
+
+function guestNoteOf(sessionId: Id): string {
+  const g = props.data.guests.find((x) => x.session_id === sessionId && x.member_id === props.memberId)
+  if (!g) return ''
+  return guestLabel(g, props.data.attendances.some((a) => a.session_id === sessionId && a.member_id === props.memberId))
+}
 
 const groups = computed(() => {
   const map = new Map<Id, ReturnType<typeof memberLines>>()
@@ -38,6 +48,7 @@ const groups = computed(() => {
       advanced: advancedAll.filter((e) => e.session_id === session.id),
       settled: props.settlements.get(session.id),
       netted: !!props.netted.get(session.id)?.has(props.memberId),
+      guestNote: guestNoteOf(session.id),
     }))
 })
 </script>
@@ -55,6 +66,7 @@ const groups = computed(() => {
         <span v-if="g.settled" class="chip-done shrink-0">已付清</span>
         <span v-else class="chip-open shrink-0">未付清</span>
       </button>
+      <p v-if="g.guestNote" class="px-4 pb-1 text-xs text-ink-400 dark:text-ink-300">{{ g.guestNote }}</p>
       <ul class="space-y-1 px-4 pb-2 text-sm">
         <li v-for="l in g.lines" :key="l.expense.id" class="flex justify-between gap-3 text-ink-500 dark:text-ink-300">
           <span class="truncate">{{ l.expense.label }}<template v-if="l.isPayer">（自己付的）</template></span>
@@ -71,8 +83,10 @@ const groups = computed(() => {
             付給 <span class="font-semibold">{{ idx.member(p.payer_id).name }}</span>
             <span class="num ml-1 font-bold">{{ formatMoney(p.due) }}</span>
           </p>
-          <span v-if="p.paid >= p.due || g.netted" class="chip-done"><Check class="size-3" />已付</span>
+          <span v-if="!p.paid && covered(g.session.id, p) >= p.due" class="chip-done"><Check class="size-3" />儲值扣款</span>
+          <span v-else-if="p.paid + covered(g.session.id, p) >= p.due || g.netted" class="chip-done"><Check class="size-3" />已付</span>
           <template v-else>
+            <span v-if="covered(g.session.id, p) > 0" class="chip-open num">儲值扣 {{ formatMoney(covered(g.session.id, p)) }}</span>
             <span v-if="p.paid > 0" class="chip-open num">已付 {{ formatMoney(p.paid) }}</span>
             <button
               v-if="canPay?.(p) && !g.settled"
@@ -83,7 +97,7 @@ const groups = computed(() => {
             >
               <Check class="size-3.5" />標記已付
             </button>
-            <span v-else-if="!p.paid" class="chip-muted">還沒付</span>
+            <span v-else-if="!p.paid && !covered(g.session.id, p)" class="chip-muted">還沒付</span>
           </template>
         </li>
       </ul>

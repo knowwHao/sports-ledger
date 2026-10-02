@@ -29,7 +29,7 @@ const emit = defineEmits<{ remove: [p: Payment] }>()
           <span class="truncate">{{ member(p.to_member_id).name }}</span>
         </p>
         <p class="truncate text-xs text-ink-400 dark:text-ink-300">
-          {{ formatDateTime(p.paid_at) }}
+          <span v-if="p.kind === 'topup'" class="font-semibold text-ball-700 dark:text-ball-400">儲值 · </span>{{ formatDateTime(p.paid_at) }}
           <template v-if="p.session_id && session?.(p.session_id)"> · {{ sessionTitle(session(p.session_id)!) }}</template>
           <template v-if="p.note"> · {{ p.note }}</template>
         </p>

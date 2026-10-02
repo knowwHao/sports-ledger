@@ -1,13 +1,17 @@
-import type { Expense, ExpenseShare, Id, LedgerData, Member, Payment, Session, Sport } from '@/types'
+import type { Expense, ExpenseShare, GuestInput, Id, LedgerData, Member, Payment, Session, SessionGuest, Sport } from '@/types'
 import {
   netBalances,
   nettedMembers,
   sessionSettlements,
   sessionStatuses,
   simplifyDebts,
+  walletCoverage,
+  wallets,
+  withoutWallets,
   type SessionStatus,
   type SettleReason,
   type Transfer,
+  type Wallet,
 } from './balance'
 import { sessionSortKey } from './format'
 
@@ -45,7 +49,11 @@ export function indexLedger(data: LedgerData) {
 }
 
 export interface LedgerSummary {
+  /** 不含儲值餘額的淨額 */
   balances: Map<Id, number>
+  wallets: Wallet[]
+  /** 各場由儲值付掉的金額，key 為 `場次|成員|保管人` */
+  walletCovered: Map<string, number>
   transfers: Transfer[]
   settlements: Map<Id, SettleReason>
   /** 各場已個人事後打平的欠款者 */
@@ -56,12 +64,16 @@ export interface LedgerSummary {
 }
 
 export function summarize(data: LedgerData): LedgerSummary {
-  const balances = netBalances(data)
+  const walletList = wallets(data)
+  const walletCovered = walletCoverage(walletList)
+  const balances = withoutWallets(netBalances(data), walletList)
   const transfers = simplifyDebts(balances)
   const netted = nettedMembers(data)
-  const settlements = sessionSettlements(data, netted)
+  const settlements = sessionSettlements(data, netted, walletCovered)
   return {
     balances,
+    wallets: walletList,
+    walletCovered,
     transfers,
     settlements,
     netted,
@@ -73,6 +85,7 @@ export function summarize(data: LedgerData): LedgerSummary {
 export interface SessionTotals {
   total: number
   attendeeCount: number
+  guestCount: number
   expenseCount: number
 }
 
@@ -81,6 +94,7 @@ export function sessionTotals(data: LedgerData, sessionId: Id): SessionTotals {
   return {
     total: expenses.reduce((sum, e) => sum + e.amount, 0),
     attendeeCount: data.attendances.filter((a) => a.session_id === sessionId).length,
+    guestCount: sessionGuests(data, sessionId).reduce((s, g) => s + g.guests, 0),
     expenseCount: expenses.length,
   }
 }
@@ -138,4 +152,36 @@ export function sortedSports(sports: Sport[]): Sport[] {
 
 export function attendeeIds(data: LedgerData, sessionId: Id): Id[] {
   return data.attendances.filter((a) => a.session_id === sessionId).map((a) => a.member_id)
+}
+
+export function sessionGuests(data: LedgerData, sessionId: Id): SessionGuest[] {
+  return data.guests.filter((g) => g.session_id === sessionId)
+}
+
+/** 每位成員要付幾人份：本人出席算 1，帶的朋友各算 1；只帶朋友沒出席的人也列入 */
+export function partyHeads(attendees: Id[], guests: GuestInput[]): Map<Id, number> {
+  const heads = new Map<Id, number>(attendees.map((id) => [id, 1]))
+  for (const g of guests) heads.set(g.member_id, (heads.get(g.member_id) ?? 0) + g.guests)
+  return heads
+}
+
+export function sessionHeads(data: LedgerData, sessionId: Id): Map<Id, number> {
+  return partyHeads(attendeeIds(data, sessionId), sessionGuests(data, sessionId))
+}
+
+/** 例：「含朋友 阿凱」「本人沒來，朋友 2 位」 */
+export function guestLabel(g: GuestInput, attending: boolean): string {
+  const who = g.names.trim() ? `${g.names.trim()}${g.guests > 1 ? `（${g.guests} 位）` : ''}` : `${g.guests} 位`
+  return attending ? `含朋友 ${who}` : `本人沒來，朋友 ${who}`
+}
+
+/** 儲值餘額顯示用：不足時停在 0 */
+export const walletCredit = (w: Wallet) => Math.max(0, w.balance)
+
+export function walletsOf(list: Wallet[], memberId: Id): Wallet[] {
+  return list.filter((w) => w.member === memberId)
+}
+
+export function walletsHeldBy(list: Wallet[], holderId: Id): Wallet[] {
+  return list.filter((w) => w.holder === holderId)
 }

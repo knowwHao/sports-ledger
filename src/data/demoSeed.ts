@@ -1,6 +1,7 @@
-import type { Attendance, Expense, ExpenseShare, Id, Member, Payment, Session, Settings, Sport } from '@/types'
+import type { Attendance, Expense, ExpenseShare, Id, Member, Payment, PaymentKind, Session, SessionGuest, Settings, Sport } from '@/types'
 import { computeDues } from '@/lib/balance'
 import { toYmd } from '@/lib/format'
+import { partyHeads } from '@/lib/ledger'
 import { AVATAR_COLORS } from '@/lib/avatar'
 
 /** 示範模式只存在這台瀏覽器，密碼直接存明碼；Supabase 版存的是加鹽雜湊 */
@@ -23,6 +24,7 @@ export interface DemoDb {
   members: Member[]
   sessions: Session[]
   attendances: Attendance[]
+  guests: SessionGuest[]
   expenses: Expense[]
   shares: ExpenseShare[]
   payments: Payment[]
@@ -117,11 +119,20 @@ export function createDemoDb(today = new Date()): DemoDb {
 
   const sessions: Session[] = []
   const attendances: Attendance[] = []
+  const guests: SessionGuest[] = []
   const expenses: Expense[] = []
   const shares: ExpenseShare[] = []
   const payments: Payment[] = []
 
-  const addPayment = (from: Member, to: Member, amount: number, paidAt: Date, sessionId: string | null, note = '') => {
+  const addPayment = (
+    from: Member,
+    to: Member,
+    amount: number,
+    paidAt: Date,
+    sessionId: string | null,
+    note = '',
+    kind: PaymentKind = 'payment',
+  ) => {
     payments.push({
       id: randomId(),
       from_member_id: from.id,
@@ -130,21 +141,40 @@ export function createDemoDb(today = new Date()): DemoDb {
       paid_at: iso(paidAt),
       session_id: sessionId,
       note,
+      kind,
       created_at: iso(paidAt),
     })
   }
 
+  /** 成員|保管人 → 儲值是幾天前；之後保管人墊付的場次由儲值扣，不另外模擬當場付款 */
+  const walletSince = new Map<string, number>()
+  const addTopup = (from: Member, to: Member, amount: number, daysAgo: number) => {
+    addPayment(from, to, amount, at(daysAgo, 21), null, '季租儲值', 'topup')
+    walletSince.set(`${from.id}|${to.id}`, daysAgo)
+  }
+
   /** payProb：每位分攤者在同場直接付清的機率；另有小機率只付一半 */
-  const addExpense = (session: Session, label: string, amount: number, payer: Member, participants: Member[], payProb: number, ageDays: number) => {
+  /** 帶朋友的場次要把帶朋友的人放進 participants，並傳入 addGuest 回傳的人份 */
+  const addExpense = (
+    session: Session,
+    label: string,
+    amount: number,
+    payer: Member,
+    participants: Member[],
+    payProb: number,
+    ageDays: number,
+    heads?: Map<Id, number>,
+  ) => {
     const expense: Expense = { id: randomId(), session_id: session.id, label, amount, payer_member_id: payer.id, created_at: session.created_at }
     expenses.push(expense)
-    const { shares: dues } = computeDues(amount, participants.map((p) => p.id))
+    const { shares: dues } = computeDues(amount, participants.map((p) => p.id), heads)
     for (const due of dues) {
       shares.push({ ...due, expense_id: expense.id })
       if (due.member_id === payer.id) continue
       const r = rand()
       const paidAt = at(Math.max(0, ageDays - 1 - Math.floor(rand() * 3)), 22)
       const from = members.find((m) => m.id === due.member_id)!
+      if ((walletSince.get(`${from.id}|${payer.id}`) ?? -1) > ageDays) continue
       if (r < payProb) addPayment(from, payer, due.amount_due, paidAt, session.id)
       else if (r < payProb + 0.12) addPayment(from, payer, Math.round(due.amount_due / 20) * 10, paidAt, session.id, '先付一半')
     }
@@ -174,6 +204,12 @@ export function createDemoDb(today = new Date()): DemoDb {
     return { session, attendees, payProb: age > 45 ? 1 : age > 20 ? 0.7 : age > 7 ? 0.4 : 0.12 }
   }
 
+  const addGuest = (session: Session, attendees: Member[], host: Member, count: number, names = '') => {
+    guests.push({ session_id: session.id, member_id: host.id, guests: count, names })
+    const heads = partyHeads(attendees.map((m) => m.id), guests.filter((g) => g.session_id === session.id))
+    return { parties: members.filter((m) => heads.has(m.id)), heads }
+  }
+
   const pickleAges = [3, 10, 17, 24, 38, 52, 66, 80]
   const pickleCourts = ['大安運動中心', '內湖運動中心', '南港運動中心']
   const picklePayers = ['孟穎', '志豪', '佳蓉', '冠廷'].map(byName)
@@ -181,6 +217,11 @@ export function createDemoDb(today = new Date()): DemoDb {
     const extra = i === 3 ? { title: '中秋友誼賽', note: '賽後飲料由承恩先墊' } : {}
     const { session, attendees, payProb } = addSession(pickleball, age, PICKLE_GROUP, { location: pick(pickleCourts), ...extra })
     const payer = attendees.includes(picklePayers[i % 4]) ? picklePayers[i % 4] : attendees[0]
+    if (i === 1) {
+      const { parties, heads } = addGuest(session, attendees, attendees.find((m) => m !== payer)!, 1, '阿凱')
+      addExpense(session, '場地費', 1200, payer, parties, payProb, age, heads)
+      return
+    }
     addExpense(session, '場地費', pick([800, 1000, 1200, 960]), payer, attendees, payProb, age)
     if (i % 3 === 1) {
       const ballPayer = attendees.find((m) => m.name === '柏翰') ?? attendees[1]
@@ -191,11 +232,23 @@ export function createDemoDb(today = new Date()): DemoDb {
     }
   })
 
+  // 羽球長期租場由怡君訂，雅婷先儲值一筆，柏翰儲值的錢已經用完
+  addTopup(byName('雅婷'), byName('怡君'), 2000, 50)
+  addTopup(byName('柏翰'), byName('怡君'), 300, 50)
+
   const badmintonAges = [6, 20, 34, 48, 75]
   const badmintonPayers = ['怡君', '家豪'].map(byName)
   badmintonAges.forEach((age, i) => {
     const { session, attendees, payProb } = addSession(badminton, age, BADMINTON_GROUP, { location: '信義運動中心' })
     const payer = attendees.includes(badmintonPayers[i % 2]) ? badmintonPayers[i % 2] : attendees[0]
+    if (i === 0) {
+      // 有人沒來但讓朋友代打，另一位多帶兩位朋友
+      const absent = BADMINTON_GROUP.map(byName).find((m) => !attendees.includes(m)) ?? attendees[1]
+      addGuest(session, attendees, absent, 1)
+      const { parties, heads } = addGuest(session, attendees, attendees.find((m) => m !== payer && m !== absent)!, 2, '小李、小陳')
+      addExpense(session, '場地費', 1400, payer, parties, payProb, age, heads)
+      return
+    }
     addExpense(session, '場地費', pick([1200, 1400]), payer, attendees, payProb, age)
     if (i % 2 === 0) {
       const shuttlePayer = attendees.find((m) => m.name === '俊宏') ?? attendees[0]
@@ -228,6 +281,7 @@ export function createDemoDb(today = new Date()): DemoDb {
     members,
     sessions,
     attendances,
+    guests,
     expenses,
     shares,
     payments,

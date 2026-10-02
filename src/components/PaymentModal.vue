@@ -31,6 +31,7 @@ watch(
   },
 )
 
+const isTopup = computed(() => props.preset?.kind === 'topup')
 const payee = computed(() => (me.value ? ledger.idx.member(me.value) : null))
 const people = computed(() => ledger.members.filter((m) => m.id !== me.value && (m.active || m.id === form.from)))
 const amount = computed(() => Math.round(form.amount ?? 0))
@@ -55,10 +56,11 @@ async function submit() {
       from_member_id: form.from,
       amount: amount.value,
       paid_at: paidAtFor(form.date),
-      session_id: props.preset?.sessionId ?? null,
+      session_id: isTopup.value ? null : (props.preset?.sessionId ?? null),
       note: form.note.trim(),
+      kind: isTopup.value ? 'topup' : 'payment',
     })
-    toast.success('已記錄付款')
+    toast.success(isTopup.value ? '已記錄儲值' : '已記錄付款')
     emit('saved')
     emit('close')
   } catch (e) {
@@ -70,10 +72,10 @@ async function submit() {
 </script>
 
 <template>
-  <ModalSheet :open="open" :title="preset?.title ?? '記錄收到的錢'" @close="emit('close')">
+  <ModalSheet :open="open" :title="preset?.title ?? (isTopup ? '記錄儲值' : '記錄收到的錢')" @close="emit('close')">
     <form id="payment-form" class="space-y-4" @submit.prevent="submit">
       <div>
-        <label class="label" for="pm-from">付款人</label>
+        <label class="label" for="pm-from">{{ isTopup ? '儲值的人' : '付款人' }}</label>
         <select id="pm-from" v-model="form.from" class="input" :disabled="preset?.fixedParties" required>
           <option value="" disabled>選擇付款人</option>
           <option v-for="m in people" :key="m.id" :value="m.id">{{ m.name }}</option>
@@ -81,7 +83,7 @@ async function submit() {
       </div>
       <div class="flex justify-center text-ink-300"><ArrowDown class="size-5" /></div>
       <div>
-        <span class="label">收款人</span>
+        <span class="label">{{ isTopup ? '保管人' : '收款人' }}</span>
         <p v-if="payee" class="flex items-center gap-2 rounded-2xl bg-ink-50 px-3 py-2.5 text-sm font-semibold dark:bg-ink-950">
           <MemberAvatar :name="payee.name" :color="payee.color" size="xs" />{{ payee.name }}（你）
         </p>
@@ -111,13 +113,16 @@ async function submit() {
       </div>
       <div>
         <label class="label" for="pm-note">備註（選填）</label>
-        <input id="pm-note" v-model="form.note" class="input" maxlength="60" placeholder="例：LINE Pay 轉帳" />
+        <input id="pm-note" v-model="form.note" class="input" maxlength="60" :placeholder="isTopup ? '例：下半季場地' : '例：LINE Pay 轉帳'" />
       </div>
+      <p v-if="isTopup" class="text-xs text-ink-400 dark:text-ink-300">
+        之後你墊付的場次，他的那份會依時間先後從儲值扣；他原本欠你的錢會先抵掉
+      </p>
     </form>
     <template #footer>
       <button type="button" class="btn-outline flex-1" @click="emit('close')">取消</button>
       <button type="submit" form="payment-form" class="btn-primary flex-1" :disabled="!valid || saving">
-        {{ saving ? '儲存中…' : '記錄付款' }}
+        {{ saving ? '儲存中…' : isTopup ? '記錄儲值' : '記錄付款' }}
       </button>
     </template>
   </ModalSheet>

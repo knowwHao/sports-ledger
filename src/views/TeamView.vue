@@ -14,16 +14,17 @@ import { useLedgerReady } from '@/composables/useLedgerReady'
 import { useWhoAmI } from '@/composables/useWhoAmI'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
-import { sortedPayments } from '@/lib/ledger'
+import { sortedPayments, walletCredit } from '@/lib/ledger'
 import { formatMoney } from '@/lib/format'
 import type { Transfer } from '@/lib/balance'
-import type { Member, Payment } from '@/types'
+import type { Member, Payment, PaymentPreset } from '@/types'
 
 const ledger = useLedgerReady()
 const me = useWhoAmI()
 
 const confirming = ref<Transfer | null>(null)
 const showPayment = ref(false)
+const paymentPreset = ref<PaymentPreset | null>(null)
 const showAllPayments = ref(false)
 
 const summary = computed(() => ledger.summary)
@@ -31,6 +32,11 @@ const balanceMembers = computed(() =>
   ledger.members.filter((m) => m.active || (summary.value.balances.get(m.id) ?? 0) !== 0),
 )
 const payments = computed(() => sortedPayments(ledger.data.payments))
+const credits = computed(() => {
+  const map = new Map<string, number>()
+  for (const w of summary.value.wallets) map.set(w.member, (map.get(w.member) ?? 0) + walletCredit(w))
+  return map
+})
 const shownPayments = computed(() => (showAllPayments.value ? payments.value : payments.value.slice(0, 5)))
 const caption = computed(() =>
   summary.value.transfers.length
@@ -41,9 +47,10 @@ const caption = computed(() =>
 const memberLink = (m: Member) => `/members/${m.id}`
 const isMine = (to: string) => !!me.value && to === me.value
 
-function openPayment() {
-  if (!me.value) toast.info('先在右上角選擇你自己並輸入密碼，才能記錄別人付給你的錢')
-  else showPayment.value = true
+function openPayment(kind: PaymentPreset['kind'] = 'payment') {
+  if (!me.value) return toast.info('先在右上角選擇你自己並輸入密碼，才能記錄別人付給你的錢')
+  paymentPreset.value = { kind }
+  showPayment.value = true
 }
 const sessionOf = (id: string) => ledger.idx.sessions.get(id)
 
@@ -106,16 +113,27 @@ async function removePayment(p: Payment) {
         <section>
           <h2 class="section-title mb-3">每人要付／要收</h2>
           <div class="card overflow-hidden">
-            <BalanceList :members="balanceMembers" :balances="summary.balances" :link-to="memberLink" :highlight-id="me" />
+            <BalanceList
+              :members="balanceMembers"
+              :balances="summary.balances"
+              :credits="credits"
+              :link-to="memberLink"
+              :highlight-id="me"
+            />
           </div>
         </section>
 
         <section>
           <div class="mb-3 flex items-center justify-between">
             <h2 class="section-title">付款紀錄</h2>
-            <button type="button" class="btn-ghost !px-3 !py-1.5 text-xs" @click="openPayment">
-              <Plus class="size-3.5" />記錄收款
-            </button>
+            <div class="flex gap-1">
+              <button type="button" class="btn-ghost !px-3 !py-1.5 text-xs" @click="openPayment('topup')">
+                <Plus class="size-3.5" />記錄儲值
+              </button>
+              <button type="button" class="btn-ghost !px-3 !py-1.5 text-xs" @click="openPayment()">
+                <Plus class="size-3.5" />記錄收款
+              </button>
+            </div>
           </div>
           <div class="card overflow-hidden">
             <template v-if="payments.length">
@@ -142,6 +160,6 @@ async function removePayment(p: Payment) {
     </div>
 
     <TransferModal :transfer="confirming" @close="confirming = null" />
-    <PaymentModal :open="showPayment" @close="showPayment = false" />
+    <PaymentModal :open="showPayment" :preset="paymentPreset" @close="showPayment = false" />
   </div>
 </template>

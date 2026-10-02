@@ -28,7 +28,7 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
   改完用 PGlite（`@electric-sql/pglite`，不在依賴內，臨時裝在專案外）實跑 `schema.sql` 兩次，
   需先替身 `anon`／`authenticated` 角色，以 `set_config('request.headers', '{"x-team-token":"…"}', true)` 模擬 header，
   驗沒帶／帶錯 token 讀不到也寫不進；並同步 `src/types.ts`、兩個 repo 實作與 `src/data/demoSeed.ts`
-- **付款與成員的寫入**：`payments` 只能經 `create_payment()`／`delete_payments()`（收款人＝登入成員），`members` 只能經
+- **付款與成員的寫入**：`payments`（含 `kind = 'topup'` 的儲值）只能經 `create_payment()`／`delete_payments()`（收款人＝登入成員），`members` 只能經
   `create_members()` 新增（一併設密碼）；不要重新 grant 這兩張表的直接寫入，前端也不要繞過 `ledger` store 的 `asPayee`
 - **改金額或結算邏輯**：先在 `src/lib/balance.test.ts` 補會失敗的測試，再改 `balance.ts`；金額一律整數新台幣
 - **手機版**：375px 寬不可水平溢出（`document.documentElement.scrollWidth` 不得大於視窗寬）
@@ -36,7 +36,7 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 
 ## 目錄地圖
 
-- `src/lib/balance.ts`：分攤、淨餘額、最少轉帳、結清判定的**唯一來源**（純函式），測試 `balance.test.ts`
+- `src/lib/balance.ts`：分攤、淨餘額、儲值帳、最少轉帳、結清判定的**唯一來源**（純函式），測試 `balance.test.ts`
 - `src/lib/ledger.ts`：畫面用彙整與排序；`src/lib/format.ts`：金額與日期格式
 - `src/data/repository.ts`：資料層介面與 `InvalidTokenError`／`MemberSessionError`／`NotPayeeError`；實作 `supabaseRepo.ts`（Supabase）、
   `demoRepo.ts`（localStorage，以 `guard()` 模擬 RLS 的 token 檢查、`guardMember()`／`attemptPin()` 模擬密碼 RPC，測試 `demoRepo.test.ts`）
@@ -49,6 +49,8 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 - 「我是誰」／成員登入：`src/composables/useWhoAmI.ts`（登入憑證存 localStorage、`askLogin()` 跳密碼框）、
   `src/components/PinLoginHost.vue`（密碼框，掛在 App.vue）、`src/components/WhoAmIPicker.vue`（AppShell 頁首）；
   密碼格式與鎖定次數在 `src/lib/pin.ts`，要與 `schema.sql` 一致
+- 儲值：`src/components/WalletCard.vue`（首頁）、`src/views/WalletView.vue`（`/members/:id/wallet` 儲值紀錄）、
+  `src/views/HeldWalletsView.vue`（`/members/:id/held` 保管的儲值）；記錄儲值共用 `PaymentModal`（`preset.kind = 'topup'`）
 - `supabase/schema.sql`：資料表、RLS、`team_token_ok()`／`regenerate_team_token()`、成員密碼與付款 RPC、預設運動種子資料
 - `.github/workflows/deploy.yml`：測試、打包、部署 Pages；`keepalive.yml`：每日不帶 token GET sports，預期 `[]`
 - `vite.config.ts`：`base` 依 `VITE_BASE`／`GITHUB_REPOSITORY` 決定、PWA manifest
@@ -57,9 +59,11 @@ npm run build        # vue-tsc 型別檢查 + vite build 到 dist/
 ## 業務規則指標（改之前先讀）
 
 - 每人應付、零頭由墊付者（付錢的人）多收 → README「分攤」、`computeDues`
+- 帶朋友（朋友算一份、記在帶他來的成員身上，可讓朋友代打）→ README「帶朋友」、`computeDues` 的 `heads`、`src/lib/ledger.ts` 的 `partyHeads`
 - 要付／要收（淨額）公式（全隊加總必為 0）→ README「要付／要收（淨額）」、`netBalances`
 - 最少轉帳（貪婪法）→ README「轉帳建議（最少轉帳）」、`simplifyDebts`
-- 結清判定（還沒記費用／當場付清／事後打平）→ README「場次狀態」、`sessionSettlements`／`sessionStatuses`
+- 儲值金（依時間扣、不足轉欠款、要付／要收與轉帳建議不含儲值）→ README「儲值金」、`wallets`／`withoutWallets`／`walletCoverage`
+- 結清判定（還沒記費用／當場付清或儲值扣款／事後打平）→ README「場次狀態」、`sessionSettlements`／`sessionStatuses`
 - 運動預設費用列 → `supabase/schema.sql` 的 sports 種子資料與 `src/data/demoSeed.ts`
 - 成員密碼、只有收款人能記付款、忘記密碼的重設 SQL → README「成員密碼」
 - 改了上述任一規則，README 對應段落要同步更新

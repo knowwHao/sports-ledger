@@ -30,6 +30,29 @@ describe('Demo 示範資料', () => {
     expect(db.payments.some((p) => p.session_id === null)).toBe(true)
   })
 
+  it('有帶朋友的場次，包含成員沒出席只讓朋友代打', () => {
+    expect(db.guests.length).toBeGreaterThanOrEqual(2)
+    const absentHost = db.guests.find(
+      (g) => !db.attendances.some((a) => a.session_id === g.session_id && a.member_id === g.member_id),
+    )
+    expect(absentHost).toBeTruthy()
+    const expense = db.expenses.find((e) => e.session_id === absentHost!.session_id)!
+    const shares = db.shares.filter((s) => s.expense_id === expense.id)
+    expect(shares.some((s) => s.member_id === absentHost!.member_id)).toBe(true)
+    const heads = db.attendances.filter((a) => a.session_id === expense.session_id).length +
+      db.guests.filter((g) => g.session_id === expense.session_id).reduce((n, g) => n + g.guests, 0)
+    expect(shares.reduce((n, s) => n + s.amount_due, 0)).toBe(Math.ceil(expense.amount / heads) * heads)
+  })
+
+  it('有儲值帳，一位還有餘額、一位已經用完', () => {
+    expect(summary.wallets.length).toBe(2)
+    expect(summary.wallets.some((w) => w.balance > 0)).toBe(true)
+    expect(summary.wallets.some((w) => w.balance < 0)).toBe(true)
+    // 還有餘額的人不會出現在轉帳建議裡等著保管人退錢
+    const rich = summary.wallets.find((w) => w.balance > 0)!
+    expect(summary.transfers.some((t) => t.from === rich.holder && t.to === rich.member)).toBe(false)
+  })
+
   it('餘額加總為 0，且有轉帳建議與已結清／未結清場次', () => {
     expect([...summary.balances.values()].reduce((a, b) => a + b, 0)).toBe(0)
     expect(summary.transfers.length).toBeGreaterThan(0)

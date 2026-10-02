@@ -14,7 +14,7 @@ import { useLedgerReady } from '@/composables/useLedgerReady'
 import { useWhoAmI } from '@/composables/useWhoAmI'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
-import { attendeeIds, sessionTotals } from '@/lib/ledger'
+import { attendeeIds, guestLabel, sessionGuests, sessionHeads, sessionTotals } from '@/lib/ledger'
 import { computeDues, sessionCoverage, type PairCoverage } from '@/lib/balance'
 import { formatDate, formatMoney, sessionTitle } from '@/lib/format'
 import type { Expense, Id, Member, PaymentPreset } from '@/types'
@@ -31,6 +31,12 @@ const locked = computed(() => !!session.value?.locked)
 const isFee = computed(() => !session.value?.play_date)
 
 const attendees = computed(() => attendeeIds(ledger.data, sessionId.value).map((id) => ledger.idx.member(id)))
+const guests = computed(() => sessionGuests(ledger.data, sessionId.value))
+const heads = computed(() => sessionHeads(ledger.data, sessionId.value))
+function guestNote(memberId: Id): string {
+  const g = guests.value.find((x) => x.member_id === memberId)
+  return g ? guestLabel(g, attendees.value.some((m) => m.id === memberId)) : ''
+}
 const expenses = computed(() =>
   ledger.data.expenses
     .filter((e) => e.session_id === sessionId.value)
@@ -40,14 +46,24 @@ const totals = computed(() => sessionTotals(ledger.data, sessionId.value))
 const coverage = computed(() => sessionCoverage(ledger.data, sessionId.value))
 /** 這場之後已經不欠任何人的成員，這場不用再另外付 */
 const nettedHere = computed(() => ledger.summary.netted.get(sessionId.value) ?? new Set<Id>())
+/** 這場由儲值付掉的金額 */
+const walletPaid = (p: PairCoverage) => ledger.summary.walletCovered.get(`${sessionId.value}|${p.member_id}|${p.payer_id}`) ?? 0
+const settled = (p: PairCoverage) => p.paid + walletPaid(p) >= p.due
+/** 儲值扣足的款項沒有付款紀錄可取消，再打勾會變成多付 */
+const byWallet = (p: PairCoverage) => p.paid < p.due && settled(p)
 const remaining = computed(() =>
-  coverage.value.reduce((s, p) => s + (nettedHere.value.has(p.member_id) ? 0 : Math.max(0, p.due - p.paid)), 0),
+  coverage.value.reduce(
+    (s, p) => s + (nettedHere.value.has(p.member_id) ? 0 : Math.max(0, p.due - p.paid - walletPaid(p))),
+    0,
+  ),
 )
 
 interface MemberRow {
   member: Member
   due: number
+  /** 含儲值扣款 */
   paid: number
+  wallet: number
   netted: boolean
   pairs: PairCoverage[]
 }
@@ -58,11 +74,13 @@ const rows = computed<MemberRow[]>(() => {
       member: ledger.idx.member(p.member_id),
       due: 0,
       paid: 0,
+      wallet: 0,
       netted: nettedHere.value.has(p.member_id),
       pairs: [],
     }
     row.due += p.due
-    row.paid += Math.min(p.paid, p.due)
+    row.paid += Math.min(p.paid + walletPaid(p), p.due)
+    row.wallet += walletPaid(p)
     row.pairs.push(p)
     map.set(p.member_id, row)
   }
@@ -83,8 +101,10 @@ const payers = computed(() => {
 
 function expenseInfo(e: Expense) {
   const shares = ledger.sharesOf(e.id)
-  const { perHead, surplus } = computeDues(e.amount, shares.map((s) => s.member_id))
-  return { count: shares.length, perHead, surplus, payer: ledger.idx.member(e.payer_member_id) }
+  const ids = shares.map((s) => s.member_id)
+  const { perHead, surplus } = computeDues(e.amount, ids, heads.value)
+  const count = ids.reduce((s, id) => s + (heads.value.get(id) ?? 1), 0)
+  return { count, perHead, surplus, payer: ledger.idx.member(e.payer_member_id) }
 }
 
 
@@ -113,8 +133,9 @@ async function togglePair(p: PairCoverage) {
       await ledger.deletePayments(p.payments.map((x) => x.id))
       toast.info('已取消付款紀錄')
     } else {
-      await ledger.payDirect(sessionId.value, p.member_id, p.payer_id, p.due)
-      toast.success(`${ledger.idx.member(p.member_id).name} 已付給 ${ledger.idx.member(p.payer_id).name} ${formatMoney(p.due)}`)
+      const amount = p.due - walletPaid(p)
+      await ledger.payDirect(sessionId.value, p.member_id, p.payer_id, amount)
+      toast.success(`${ledger.idx.member(p.member_id).name} 已付給 ${ledger.idx.member(p.payer_id).name} ${formatMoney(amount)}`)
     }
   } catch (e) {
     toast.error(`操作失敗：${errorMessage(e)}`)
@@ -126,7 +147,7 @@ async function togglePair(p: PairCoverage) {
 function partial(p: PairCoverage) {
   paymentPreset.value = {
     from: p.member_id,
-    amount: Math.max(1, p.due - p.paid),
+    amount: Math.max(1, p.due - p.paid - walletPaid(p)),
     sessionId: sessionId.value,
     title: `${ledger.idx.member(p.member_id).name} 付給 ${ledger.idx.member(p.payer_id).name}`,
     fixedParties: true,
@@ -273,10 +294,13 @@ async function removeSession() {
                   <p class="truncate font-semibold">{{ row.member.name }}</p>
                   <p class="text-xs text-ink-400 dark:text-ink-300">
                     應付 <span class="num font-semibold">{{ formatMoney(row.due) }}</span>
-                    <template v-if="row.paid > 0 && row.paid < row.due && !row.netted"> · 已付 {{ formatMoney(row.paid) }}</template>
+                    <template v-if="guestNote(row.member.id)"> · {{ guestNote(row.member.id) }}</template>
+                    <template v-if="row.wallet > 0 && row.wallet < row.due"> · 儲值扣 {{ formatMoney(row.wallet) }}</template>
+                    <template v-if="row.paid > row.wallet && row.paid < row.due && !row.netted"> · 已付 {{ formatMoney(row.paid - row.wallet) }}</template>
                   </p>
                 </div>
-                <span v-if="row.paid >= row.due || row.netted" class="chip-done"><Check class="size-3" />已付</span>
+                <span v-if="row.wallet >= row.due" class="chip-done"><Check class="size-3" />儲值扣款</span>
+                <span v-else-if="row.paid >= row.due || row.netted" class="chip-done"><Check class="size-3" />已付</span>
                 <span v-else-if="row.paid > 0" class="chip-open">付了一部分</span>
                 <span v-else class="chip-muted">還沒付</span>
               </div>
@@ -287,7 +311,7 @@ async function removeSession() {
                     type="button"
                     class="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-default"
                     :class="
-                      p.paid >= p.due || row.netted
+                      settled(p) || row.netted
                         ? 'border-ball-500 bg-ball-200/60 text-ink-900 dark:border-ball-400/50 dark:bg-ball-400/10 dark:text-ball-200'
                         : p.paid > 0
                           ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-200'
@@ -295,18 +319,18 @@ async function removeSession() {
                             ? 'border-ink-200 hover:border-ink-400 dark:border-ink-700'
                             : 'border-dashed border-ink-200 text-ink-400 dark:border-ink-700'
                     "
-                    :aria-pressed="p.paid >= p.due || row.netted"
-                    :disabled="!canMark(p) || busyPair === pairKey(p) || (row.netted && p.paid < p.due)"
+                    :aria-pressed="settled(p) || row.netted"
+                    :disabled="!canMark(p) || busyPair === pairKey(p) || byWallet(p) || (row.netted && p.paid < p.due)"
                     @click="togglePair(p)"
                   >
                     <span class="flex min-w-0 items-center gap-1.5">
-                      <CircleCheck v-if="p.paid >= p.due || row.netted" class="size-4 shrink-0" />
+                      <CircleCheck v-if="settled(p) || row.netted" class="size-4 shrink-0" />
                       <Circle v-else class="size-4 shrink-0 text-ink-300" />
-                      <span class="truncate">已付給 {{ ledger.idx.member(p.payer_id).name }}</span>
+                      <span class="truncate">{{ byWallet(p) && !p.paid ? '從儲值付給' : '已付給' }} {{ ledger.idx.member(p.payer_id).name }}</span>
                     </span>
-                    <span class="num shrink-0">{{ formatMoney(p.due) }}</span>
+                    <span class="num shrink-0">{{ formatMoney(settled(p) ? p.due : p.due - walletPaid(p)) }}</span>
                   </button>
-                  <button v-if="p.paid < p.due && !row.netted && canMark(p)" type="button" class="btn-ghost shrink-0 !px-2.5 !py-2 text-xs" @click="partial(p)">
+                  <button v-if="!settled(p) && !row.netted && canMark(p)" type="button" class="btn-ghost shrink-0 !px-2.5 !py-2 text-xs" @click="partial(p)">
                     付一部分
                   </button>
                 </div>
@@ -336,12 +360,20 @@ async function removeSession() {
             <span class="text-ink-400">總金額</span>
             <span class="num font-black">{{ formatMoney(totals.total) }}</span>
           </div>
-          <h3 class="section-title mt-5 mb-2">{{ isFee ? '分攤的人' : '出席' }}（{{ attendees.length }}）</h3>
+          <h3 class="section-title mt-5 mb-2">
+            {{ isFee ? '分攤的人' : '出席' }}（{{ attendees.length }}{{ totals.guestCount ? `＋朋友 ${totals.guestCount}` : '' }}）
+          </h3>
           <div class="flex flex-wrap gap-1.5">
             <span v-for="m in attendees" :key="m.id" class="chip-muted !py-1 !pl-1">
               <MemberAvatar :name="m.name" :color="m.color" size="xs" :muted="!m.active" />{{ m.name }}
             </span>
           </div>
+          <ul v-if="guests.length" class="mt-2 space-y-1 text-xs text-ink-400 dark:text-ink-300">
+            <li v-for="g in guests" :key="g.member_id">
+              <span class="font-semibold text-ink-600 dark:text-ink-200">{{ ledger.idx.member(g.member_id).name }}</span>
+              {{ guestNote(g.member_id) }}
+            </li>
+          </ul>
         </section>
       </div>
 

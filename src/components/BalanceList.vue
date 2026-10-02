@@ -8,6 +8,8 @@ import { formatMoney } from '@/lib/format'
 const props = defineProps<{
   members: Member[]
   balances: Map<Id, number>
+  /** 儲值餘額，不算在要付／要收裡 */
+  credits?: Map<Id, number>
   /** 有傳就讓每列可點 */
   linkTo?: (m: Member) => string
   highlightId?: Id | null
@@ -45,6 +47,7 @@ const max = computed(() => Math.max(1, ...rows.value.map((r) => Math.abs(r.balan
             <p class="truncate font-semibold">
               {{ r.member.name }}
               <span v-if="r.member.id === highlightId" class="chip-done ml-1 !py-0 align-middle">我</span>
+              <span v-if="credits?.get(r.member.id)" class="chip-muted num ml-1 !py-0 align-middle">儲值 {{ formatMoney(credits.get(r.member.id)!) }}</span>
             </p>
             <p
               class="shrink-0 text-sm font-bold"

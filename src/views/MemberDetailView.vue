@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { CalendarX, ReceiptText, SearchX } from 'lucide-vue-next'
+import { CalendarX, ChevronRight, ReceiptText, SearchX } from 'lucide-vue-next'
 import PageHeader from '@/components/PageHeader.vue'
 import MemberAvatar from '@/components/MemberAvatar.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -14,7 +14,7 @@ import { useLedgerReady } from '@/composables/useLedgerReady'
 import { useWhoAmI } from '@/composables/useWhoAmI'
 import { confirmDialog } from '@/composables/useConfirm'
 import { errorMessage, toast } from '@/composables/useToast'
-import { memberAdvanced, memberLines, memberPayments } from '@/lib/ledger'
+import { memberAdvanced, memberLines, memberPayments, walletCredit, walletsHeldBy, walletsOf } from '@/lib/ledger'
 import { formatMoney } from '@/lib/format'
 import type { PairCoverage, Transfer } from '@/lib/balance'
 import type { Payment } from '@/types'
@@ -35,15 +35,19 @@ const payments = computed(() => memberPayments(ledger.data, memberId.value))
 const lines = computed(() => memberLines(ledger.data, memberId.value))
 const totalDue = computed(() => lines.value.reduce((s, l) => s + l.share.amount_due, 0))
 const advanced = computed(() => memberAdvanced(ledger.data, memberId.value))
+const myWallets = computed(() => walletsOf(ledger.summary.wallets, memberId.value))
+const held = computed(() => walletsHeldBy(ledger.summary.wallets, memberId.value))
+const sumCredit = (list: typeof myWallets.value) => list.reduce((s, w) => s + walletCredit(w), 0)
 const busy = ref<string | null>(null)
 const confirming = ref<Transfer | null>(null)
 const sessionOf = (id: string) => ledger.idx.sessions.get(id)
 
 async function pay(p: PairCoverage, sessionId: string) {
   busy.value = `${sessionId}:${p.payer_id}`
+  const amount = p.due - p.paid - (ledger.summary.walletCovered.get(`${sessionId}|${p.member_id}|${p.payer_id}`) ?? 0)
   try {
-    await ledger.payDirect(sessionId, p.member_id, p.payer_id, p.due - p.paid)
-    toast.success(`已記錄付給 ${ledger.idx.member(p.payer_id).name} ${formatMoney(p.due - p.paid)}`)
+    await ledger.payDirect(sessionId, p.member_id, p.payer_id, amount)
+    toast.success(`已記錄付給 ${ledger.idx.member(p.payer_id).name} ${formatMoney(amount)}`)
   } catch (e) {
     toast.error(`記錄失敗：${errorMessage(e)}`)
   } finally {
@@ -101,6 +105,27 @@ async function removePayment(p: Payment) {
         </dl>
       </section>
 
+      <div v-if="myWallets.length || held.length" class="mb-6 grid gap-3 sm:grid-cols-2">
+        <RouterLink
+          v-if="myWallets.length"
+          :to="`/members/${member.id}/wallet`"
+          class="card flex items-center gap-3 p-4 transition hover:bg-ink-50 dark:hover:bg-ink-800/60"
+        >
+          <span class="min-w-0 flex-1 font-semibold">儲值餘額</span>
+          <span class="num font-black">{{ formatMoney(sumCredit(myWallets)) }}</span>
+          <ChevronRight class="size-4 shrink-0 text-ink-300" />
+        </RouterLink>
+        <RouterLink
+          v-if="held.length"
+          :to="`/members/${member.id}/held`"
+          class="card flex items-center gap-3 p-4 transition hover:bg-ink-50 dark:hover:bg-ink-800/60"
+        >
+          <span class="min-w-0 flex-1 font-semibold">保管的儲值 · {{ held.length }} 人</span>
+          <span class="num font-black">{{ formatMoney(sumCredit(held)) }}</span>
+          <ChevronRight class="size-4 shrink-0 text-ink-300" />
+        </RouterLink>
+      </div>
+
       <div class="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div class="space-y-6 lg:col-span-3">
           <section>
@@ -111,6 +136,7 @@ async function removePayment(p: Payment) {
               :member-id="member.id"
               :settlements="ledger.summary.settlements"
               :netted="ledger.summary.netted"
+              :wallet-covered="ledger.summary.walletCovered"
               :busy="busy"
               :can-pay="(p) => isMine(p.payer_id)"
               @pay="pay"
