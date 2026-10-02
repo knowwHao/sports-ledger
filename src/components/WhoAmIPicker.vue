@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { UserRound } from 'lucide-vue-next'
+import { ChevronDown, UserRound } from 'lucide-vue-next'
 import { useLedgerStore } from '@/stores/ledger'
 import { askLogin, logout, useWhoAmI } from '@/composables/useWhoAmI'
 
@@ -24,9 +24,15 @@ async function onChange(e: Event) {
   <label class="relative flex min-w-0 items-center">
     <span class="sr-only">我是誰</span>
     <UserRound class="pointer-events-none absolute left-2.5 size-4 text-ink-400" />
-    <select :value="value" class="input !w-auto max-w-36 min-w-0 truncate !py-1.5 !pl-8 text-sm" @change="onChange">
+    <!-- 原生箭頭貼著框的右緣畫，遇到大圓角看起來像被切掉，所以隱藏後自己畫 -->
+    <select
+      :value="value"
+      class="input !w-auto max-w-36 min-w-0 appearance-none truncate !py-1.5 !pr-8 !pl-8 text-sm"
+      @change="onChange"
+    >
       <option value="">我是誰？</option>
       <option v-for="m in ledger.activeMembers" :key="m.id" :value="m.id">{{ m.name }}</option>
     </select>
+    <ChevronDown class="pointer-events-none absolute right-2.5 size-4 text-ink-400" />
   </label>
 </template>
