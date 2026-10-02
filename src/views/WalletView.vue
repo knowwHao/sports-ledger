@@ -9,7 +9,7 @@ import MemberAvatar from '@/components/MemberAvatar.vue'
 import PaymentModal from '@/components/PaymentModal.vue'
 import { useLedgerReady } from '@/composables/useLedgerReady'
 import { useWhoAmI } from '@/composables/useWhoAmI'
-import { guestLabel, walletCredit, walletsOf } from '@/lib/ledger'
+import { guestLabel, walletCredit, walletHistory, walletsOf } from '@/lib/ledger'
 import { formatDate, formatMoney, toYmd } from '@/lib/format'
 import type { WalletEntry } from '@/lib/balance'
 import type { PaymentPreset } from '@/types'
@@ -61,11 +61,12 @@ function describe(e: WalletEntry): { label: string; note: string; link: string |
   return { label, note: p?.note ?? '', link: null }
 }
 
+const history = computed(() => (wallet.value ? walletHistory(wallet.value) : { opening: 0, entries: [] }))
 const rows = computed<Row[]>(() => {
-  const entries = wallet.value?.entries ?? []
+  const { opening, entries } = history.value
   return entries
     .map((e, i) => {
-      const before = i ? entries[i - 1].balance : 0
+      const before = i ? entries[i - 1].balance : opening
       return {
         key: `${e.kind}:${e.sessionId ?? ''}:${e.paymentId ?? ''}:${i}`,
         date: formatDate(toYmd(new Date(e.at))),
@@ -161,6 +162,22 @@ function recordTopup() {
               </div>
               <ChevronRight v-if="r.link" class="mt-0.5 size-4 shrink-0 text-ink-300" />
             </component>
+          </li>
+          <li v-if="history.opening" class="flex items-start gap-3 px-4 py-3">
+            <span class="w-12 shrink-0" aria-hidden="true" />
+            <div class="min-w-0 flex-1">
+              <p class="font-semibold">儲值前的帳</p>
+              <p class="text-xs text-ink-400 dark:text-ink-300">
+                {{
+                  history.opening < 0
+                    ? `當時欠 ${holder?.name} ${formatMoney(-history.opening)}，儲值時先抵掉`
+                    : `當時 ${holder?.name} 欠他 ${formatMoney(history.opening)}，併入儲值`
+                }}
+              </p>
+            </div>
+            <p class="num shrink-0 font-bold" :class="history.opening > 0 ? 'text-ball-700 dark:text-ball-400' : ''">
+              {{ history.opening > 0 ? '+' : '−' }}{{ formatMoney(Math.abs(history.opening)) }}
+            </p>
           </li>
         </ul>
       </template>
