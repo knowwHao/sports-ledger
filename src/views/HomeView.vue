@@ -76,7 +76,7 @@ function onCreated(id: string) {
           </div>
         </section>
 
-        <WalletCard v-if="meMember && myWallets.length" :member-id="meMember.id" :wallets="myWallets" :member="ledger.idx.member" />
+        <WalletCard v-if="meMember" :member-id="meMember.id" :wallets="myWallets" :member="ledger.idx.member" />
 
         <section
           v-if="meMember"
