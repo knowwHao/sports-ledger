@@ -143,6 +143,123 @@ export function sessionCoverage(data: CoverageInput, sessionId: Id): PairCoverag
   return [...pairs.values()]
 }
 
+type TimelineEvent = { t: number; order: number; session?: Session; payment?: Payment }
+
+/** 場次以 sessionTime、付款以 paid_at 排序；同一時間點先記費用再記付款，避免當天付款被排到場次之前 */
+function timeline(sessions: Session[], payments: Payment[]): TimelineEvent[] {
+  const events: TimelineEvent[] = [
+    ...sessions.map((session) => ({ t: sessionTime(session), order: 0, session })),
+    ...payments.map((payment) => ({ t: Date.parse(payment.paid_at), order: 1, payment })),
+  ]
+  return events.sort((a, b) => a.t - b.t || a.order - b.order)
+}
+
+function expensesBySession(expenses: Expense[]): Map<Id, Expense[]> {
+  const map = new Map<Id, Expense[]>()
+  for (const e of expenses) map.set(e.session_id, [...(map.get(e.session_id) ?? []), e])
+  return map
+}
+
+const walletKey = (member: Id, holder: Id) => `${member}|${holder}`
+
+/** 有儲值紀錄的（成員, 保管人）配對 */
+function walletPairs(payments: Payment[]): Set<string> {
+  return new Set(payments.filter((p) => p.kind === 'topup').map((p) => walletKey(p.from_member_id, p.to_member_id)))
+}
+
+export interface WalletEntry {
+  /** refund＝保管人付給成員的錢 */
+  kind: 'topup' | 'payment' | 'refund' | 'session'
+  at: number
+  sessionId: Id | null
+  paymentId: Id | null
+  delta: number
+  /** 這筆之後的餘額，負數＝儲值不足、差額是欠保管人的錢 */
+  balance: number
+  /** 場次扣款中由儲值付掉的部分 */
+  covered?: number
+}
+
+export interface Wallet {
+  member: Id
+  holder: Id
+  balance: number
+  /** 依時間由舊到新 */
+  entries: WalletEntry[]
+}
+
+export type WalletInput = Pick<LedgerData, 'sessions' | 'expenses' | 'shares' | 'payments'>
+
+/**
+ * 儲值帳：成員儲值給保管人後，兩人之間所有往來（儲值、一般付款、互相墊付的應付）依時間累計成餘額，
+ * 所以儲值前的舊欠款會先抵掉；只算保管人墊付的費用，欠別人的錢不受影響
+ */
+export function wallets(data: WalletInput): Wallet[] {
+  const pairs = walletPairs(data.payments)
+  if (!pairs.size) return []
+  const map = new Map<string, Wallet>()
+  for (const k of pairs) {
+    const [member, holder] = k.split('|')
+    map.set(k, { member, holder, balance: 0, entries: [] })
+  }
+  const byExpense = groupShares(data.shares)
+  const bySession = expensesBySession(data.expenses)
+
+  for (const ev of timeline(data.sessions, data.payments)) {
+    if (ev.session) {
+      const deltas = new Map<string, { due: number; credit: number }>()
+      const bump = (k: string) => deltas.get(k) ?? deltas.set(k, { due: 0, credit: 0 }).get(k)!
+      for (const e of bySession.get(ev.session.id) ?? []) {
+        for (const s of byExpense.get(e.id) ?? []) {
+          if (s.member_id === e.payer_member_id || s.amount_due <= 0) continue
+          if (map.has(walletKey(s.member_id, e.payer_member_id))) bump(walletKey(s.member_id, e.payer_member_id)).due += s.amount_due
+          if (map.has(walletKey(e.payer_member_id, s.member_id))) bump(walletKey(e.payer_member_id, s.member_id)).credit += s.amount_due
+        }
+      }
+      for (const [k, d] of deltas) {
+        const w = map.get(k)!
+        const covered = Math.min(d.due, Math.max(0, w.balance + d.credit))
+        w.balance += d.credit - d.due
+        w.entries.push({ kind: 'session', at: ev.t, sessionId: ev.session.id, paymentId: null, delta: d.credit - d.due, balance: w.balance, covered })
+      }
+    } else if (ev.payment) {
+      const p = ev.payment
+      const entry = { at: ev.t, sessionId: p.session_id, paymentId: p.id }
+      const paid = map.get(walletKey(p.from_member_id, p.to_member_id))
+      if (paid) {
+        paid.balance += p.amount
+        paid.entries.push({ ...entry, kind: p.kind === 'topup' ? 'topup' : 'payment', delta: p.amount, balance: paid.balance })
+      }
+      const back = map.get(walletKey(p.to_member_id, p.from_member_id))
+      if (back) {
+        back.balance -= p.amount
+        back.entries.push({ ...entry, kind: 'refund', delta: -p.amount, balance: back.balance })
+      }
+    }
+  }
+  return [...map.values()]
+}
+
+/** 各場由儲值付掉的金額，key 為 `場次|成員|保管人` */
+export function walletCoverage(list: Wallet[]): Map<string, number> {
+  const map = new Map<string, number>()
+  for (const w of list) {
+    for (const e of w.entries) if (e.sessionId && e.covered) map.set(`${e.sessionId}|${w.member}|${w.holder}`, e.covered)
+  }
+  return map
+}
+
+/** 把儲值餘額從淨額中拿掉：那是成員放在保管人那裡的錢，不是保管人要退的欠款 */
+export function withoutWallets(balances: Map<Id, number>, list: Wallet[]): Map<Id, number> {
+  const out = new Map(balances)
+  for (const w of list) {
+    if (w.balance <= 0) continue
+    add(out, w.member, -w.balance)
+    add(out, w.holder, w.balance)
+  }
+  return out
+}
+
 export type SettleReason = 'direct' | 'netted'
 
 /** none＝尚無費用，不算結清也不算未結清 */
@@ -153,41 +270,54 @@ export type StatusInput = Pick<LedgerData, 'members' | 'sessions' | 'expenses' |
 /**
  * 個人事後打平：依時間重播所有場次與付款，某人在某場有欠款，之後只要有任一時間點他的淨餘額 ≥ 0（不再欠任何人），
  * 他在該場以及之前場次的欠款都算已打平；回傳各場已打平的欠款者
+ * 淨餘額不含儲值餘額，否則有儲值的人欠別人的錢會被當成已打平
  */
 export function nettedMembers(data: StatusInput): Map<Id, Set<Id>> {
-  type Event = { t: number; order: number; session?: Session; payment?: Payment }
-  const events: Event[] = [
-    ...data.sessions.map((session) => ({ t: sessionTime(session), order: 0, session })),
-    ...data.payments.map((payment) => ({ t: Date.parse(payment.paid_at), order: 1, payment })),
-  ]
-  // 同一時間點先記費用再記付款，避免當天付款被排到場次之前
-  events.sort((a, b) => a.t - b.t || a.order - b.order)
-
   const byExpense = groupShares(data.shares)
-  const expensesBySession = new Map<Id, Expense[]>()
-  for (const e of data.expenses) expensesBySession.set(e.session_id, [...(expensesBySession.get(e.session_id) ?? []), e])
-
+  const bySession = expensesBySession(data.expenses)
+  const pairs = walletPairs(data.payments)
   const bal = new Map<Id, number>(data.members.map((m) => [m.id, 0]))
+  const pairNet = new Map<string, number>()
+  const movePair = (member: Id, holder: Id, delta: number) => {
+    const k = walletKey(member, holder)
+    if (pairs.has(k)) pairNet.set(k, (pairNet.get(k) ?? 0) + delta)
+  }
+  const adjusted = (id: Id) => {
+    let v = bal.get(id) ?? 0
+    for (const [k, net] of pairNet) {
+      if (net <= 0) continue
+      const [member, holder] = k.split('|')
+      if (member === id) v -= net
+      else if (holder === id) v += net
+    }
+    return v
+  }
+
   // 每人還沒打平的欠款場次
   const pending = new Map<Id, Id[]>()
   const result = new Map<Id, Set<Id>>()
-  for (const ev of events) {
+  for (const ev of timeline(data.sessions, data.payments)) {
     if (ev.session) {
-      for (const e of expensesBySession.get(ev.session.id) ?? []) {
+      for (const e of bySession.get(ev.session.id) ?? []) {
         const shares = byExpense.get(e.id) ?? []
         applyExpense(bal, e, shares)
         for (const s of shares) {
           if (s.member_id === e.payer_member_id || s.amount_due <= 0) continue
+          movePair(s.member_id, e.payer_member_id, -s.amount_due)
+          movePair(e.payer_member_id, s.member_id, s.amount_due)
           const list = pending.get(s.member_id) ?? []
           if (!list.includes(ev.session.id)) list.push(ev.session.id)
           pending.set(s.member_id, list)
         }
       }
     } else if (ev.payment) {
-      applyPayment(bal, ev.payment)
+      const p = ev.payment
+      applyPayment(bal, p)
+      movePair(p.from_member_id, p.to_member_id, p.amount)
+      movePair(p.to_member_id, p.from_member_id, -p.amount)
     }
     for (const [memberId, sessionIds] of pending) {
-      if ((bal.get(memberId) ?? 0) < 0) continue
+      if (adjusted(memberId) < 0) continue
       for (const id of sessionIds) result.set(id, (result.get(id) ?? new Set()).add(memberId))
       pending.delete(memberId)
     }
@@ -197,13 +327,14 @@ export function nettedMembers(data: StatusInput): Map<Id, Set<Id>> {
 
 /**
  * 場次結清判定，有費用且符合任一即結清：
- * (1) 每位非墊付者的應付都有足額的同場直接付款
+ * (1) 每位非墊付者的應付都有足額的同場直接付款或儲值扣款
  * (2) 每位非墊付者不是付清就是個人事後打平（見 nettedMembers）；全隊歸零時人人都打平，涵蓋全隊抵銷的情況
  * 回傳已結清場次與原因；沒有費用的場次一律不在 Map 內
  */
 export function sessionSettlements(
   data: StatusInput,
   netted: Map<Id, Set<Id>> = nettedMembers(data),
+  covered: Map<string, number> = walletCoverage(wallets(data)),
 ): Map<Id, SettleReason> {
   const result = new Map<Id, SettleReason>()
   const withExpense = new Set(data.expenses.map((e) => e.session_id))
@@ -211,8 +342,9 @@ export function sessionSettlements(
   for (const s of data.sessions) {
     if (!withExpense.has(s.id)) continue
     const pairs = sessionCoverage(data, s.id)
-    if (pairs.every((p) => p.paid >= p.due)) result.set(s.id, 'direct')
-    else if (pairs.every((p) => p.paid >= p.due || netted.get(s.id)?.has(p.member_id))) result.set(s.id, 'netted')
+    const paid = (p: PairCoverage) => p.paid + (covered.get(`${s.id}|${p.member_id}|${p.payer_id}`) ?? 0) >= p.due
+    if (pairs.every(paid)) result.set(s.id, 'direct')
+    else if (pairs.every((p) => paid(p) || netted.get(s.id)?.has(p.member_id))) result.set(s.id, 'netted')
   }
   return result
 }

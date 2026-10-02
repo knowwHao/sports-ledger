@@ -20,6 +20,8 @@ export const router = createRouter({
     { path: '/team', component: () => import('@/views/TeamView.vue'), meta: { title: '結餘總覽' } },
     { path: '/members', component: () => import('@/views/MembersView.vue'), meta: { title: '成員' } },
     { path: '/members/:id', component: () => import('@/views/MemberDetailView.vue'), meta: { title: '個人帳' } },
+    { path: '/members/:id/wallet', component: () => import('@/views/WalletView.vue'), meta: { title: '儲值紀錄' } },
+    { path: '/members/:id/held', component: () => import('@/views/HeldWalletsView.vue'), meta: { title: '保管的儲值' } },
     { path: '/settings', component: () => import('@/views/SettingsView.vue'), meta: { title: '成員與設定' } },
     {
       // 球隊連結：記下 token 後以 replace 導回首頁，網址與瀏覽紀錄都不留 token，避免截圖外流

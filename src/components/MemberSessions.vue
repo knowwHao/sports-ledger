@@ -13,6 +13,8 @@ const props = defineProps<{
   settlements: Map<Id, SettleReason>
   /** 各場已個人事後打平的欠款者 */
   netted: Map<Id, Set<Id>>
+  /** 各場由儲值付掉的金額，key 為 `場次|成員|保管人` */
+  walletCovered: Map<string, number>
   /** 只有收款人本人能標記已付 */
   canPay?: (p: PairCoverage) => boolean
   busy?: string | null
@@ -20,6 +22,8 @@ const props = defineProps<{
 const emit = defineEmits<{ pay: [pair: PairCoverage, sessionId: Id]; open: [sessionId: Id] }>()
 
 const idx = computed(() => indexLedger(props.data))
+
+const covered = (sessionId: Id, p: PairCoverage) => props.walletCovered.get(`${sessionId}|${p.member_id}|${p.payer_id}`) ?? 0
 
 function guestNoteOf(sessionId: Id): string {
   const g = props.data.guests.find((x) => x.session_id === sessionId && x.member_id === props.memberId)
@@ -79,8 +83,10 @@ const groups = computed(() => {
             付給 <span class="font-semibold">{{ idx.member(p.payer_id).name }}</span>
             <span class="num ml-1 font-bold">{{ formatMoney(p.due) }}</span>
           </p>
-          <span v-if="p.paid >= p.due || g.netted" class="chip-done"><Check class="size-3" />已付</span>
+          <span v-if="!p.paid && covered(g.session.id, p) >= p.due" class="chip-done"><Check class="size-3" />儲值扣款</span>
+          <span v-else-if="p.paid + covered(g.session.id, p) >= p.due || g.netted" class="chip-done"><Check class="size-3" />已付</span>
           <template v-else>
+            <span v-if="covered(g.session.id, p) > 0" class="chip-open num">儲值扣 {{ formatMoney(covered(g.session.id, p)) }}</span>
             <span v-if="p.paid > 0" class="chip-open num">已付 {{ formatMoney(p.paid) }}</span>
             <button
               v-if="canPay?.(p) && !g.settled"
@@ -91,7 +97,7 @@ const groups = computed(() => {
             >
               <Check class="size-3.5" />標記已付
             </button>
-            <span v-else-if="!p.paid" class="chip-muted">還沒付</span>
+            <span v-else-if="!p.paid && !covered(g.session.id, p)" class="chip-muted">還沒付</span>
           </template>
         </li>
       </ul>

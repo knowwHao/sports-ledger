@@ -61,6 +61,8 @@ export class DemoRepo implements LedgerRepository {
       db.pins ??= {}
       // 加入帶朋友功能前存下的示範資料沒有 guests
       db.guests ??= []
+      // 加入儲值功能前的付款都是一般付款
+      for (const p of db.payments) p.kind ??= 'payment'
       for (const m of db.members) db.pins[m.id] ??= newDemoPin()
       return db
     } catch {
@@ -286,6 +288,8 @@ export class DemoRepo implements LedgerRepository {
   async createPayment(auth: MemberSession, p: PaymentInput) {
     this.guardMember(auth)
     if (p.from_member_id === auth.memberId) throw new Error('付款人與收款人不能是同一人')
+    // 模擬 schema.sql 的 payments_topup_no_session
+    if (p.kind === 'topup' && p.session_id) throw new Error('儲值不能指定場次')
     const now = new Date().toISOString()
     this.db.payments.push({ ...p, to_member_id: auth.memberId, id: randomId(), created_at: now })
     this.commit()

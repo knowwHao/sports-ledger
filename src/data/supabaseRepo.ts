@@ -240,6 +240,7 @@ export class SupabaseRepo implements LedgerRepository {
         p_paid_at: p.paid_at,
         p_session: p.session_id,
         p_note: p.note,
+        p_kind: p.kind,
       }),
     )
   }

@@ -142,9 +142,17 @@ create table if not exists public.payments (
   -- 刪除場次時一併刪除該場的直接付款，與前端確認視窗的說明一致
   session_id     uuid references public.sessions (id) on delete cascade,
   note           text not null default '',
+  -- topup＝儲值：先放在保管人那裡，之後他墊付的費用依時間先後扣，見前端 balance.ts 的 wallets()
+  kind           text not null default 'payment' check (kind in ('payment', 'topup')),
   created_at     timestamptz not null default now(),
   constraint payments_distinct_parties check (from_member_id <> to_member_id)
 );
+-- 舊版 payments 沒有 kind，既有付款都是一般付款
+alter table public.payments
+  add column if not exists kind text not null default 'payment' check (kind in ('payment', 'topup'));
+alter table public.payments drop constraint if exists payments_topup_no_session;
+alter table public.payments
+  add constraint payments_topup_no_session check (kind = 'payment' or session_id is null);
 
 -- 成員密碼：只存加鹽雜湊，anon／authenticated 完全沒有權限，只能經由下方的 RPC 驗證與修改
 -- session_key 是登入成功後發給裝置的憑證，記付款時帶上；改密碼會換發，其他裝置隨之登出
@@ -339,9 +347,12 @@ begin
 end;
 $$;
 
--- 只有收款人能記付款：收款人一律是登入的成員本人
+-- 只有收款人能記付款：收款人一律是登入的成員本人；儲值也一樣由收到錢的保管人記
+-- 加 p_kind 前的舊版簽章要先刪掉，否則會留下一個不能記儲值的同名函式
+drop function if exists public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text);
 create or replace function public.create_payment(
-  p_member uuid, p_key text, p_from uuid, p_amount int, p_paid_at timestamptz, p_session uuid, p_note text)
+  p_member uuid, p_key text, p_from uuid, p_amount int, p_paid_at timestamptz, p_session uuid, p_note text,
+  p_kind text default 'payment')
 returns uuid
 language plpgsql
 volatile
@@ -352,8 +363,8 @@ declare
   new_id uuid;
 begin
   perform public.require_member(p_member, p_key);
-  insert into public.payments (from_member_id, to_member_id, amount, paid_at, session_id, note)
-  values (p_from, p_member, p_amount, coalesce(p_paid_at, now()), p_session, coalesce(p_note, ''))
+  insert into public.payments (from_member_id, to_member_id, amount, paid_at, session_id, note, kind)
+  values (p_from, p_member, p_amount, coalesce(p_paid_at, now()), p_session, coalesce(p_note, ''), coalesce(p_kind, 'payment'))
   returning id into new_id;
   return new_id;
 end;
@@ -498,7 +509,7 @@ revoke execute on function public.member_change_pin(uuid, text, text) from publi
 grant execute on function public.member_change_pin(uuid, text, text) to anon, authenticated;
 revoke execute on function public.create_members(jsonb, text) from public;
 grant execute on function public.create_members(jsonb, text) to anon, authenticated;
-revoke execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text) from public;
-grant execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text) to anon, authenticated;
+revoke execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text, text) from public;
+grant execute on function public.create_payment(uuid, text, uuid, int, timestamptz, uuid, text, text) to anon, authenticated;
 revoke execute on function public.delete_payments(uuid, text, uuid[]) from public;
 grant execute on function public.delete_payments(uuid, text, uuid[]) to anon, authenticated;

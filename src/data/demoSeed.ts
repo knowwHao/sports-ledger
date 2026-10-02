@@ -1,4 +1,4 @@
-import type { Attendance, Expense, ExpenseShare, Id, Member, Payment, Session, SessionGuest, Settings, Sport } from '@/types'
+import type { Attendance, Expense, ExpenseShare, Id, Member, Payment, PaymentKind, Session, SessionGuest, Settings, Sport } from '@/types'
 import { computeDues } from '@/lib/balance'
 import { toYmd } from '@/lib/format'
 import { partyHeads } from '@/lib/ledger'
@@ -124,7 +124,15 @@ export function createDemoDb(today = new Date()): DemoDb {
   const shares: ExpenseShare[] = []
   const payments: Payment[] = []
 
-  const addPayment = (from: Member, to: Member, amount: number, paidAt: Date, sessionId: string | null, note = '') => {
+  const addPayment = (
+    from: Member,
+    to: Member,
+    amount: number,
+    paidAt: Date,
+    sessionId: string | null,
+    note = '',
+    kind: PaymentKind = 'payment',
+  ) => {
     payments.push({
       id: randomId(),
       from_member_id: from.id,
@@ -133,8 +141,16 @@ export function createDemoDb(today = new Date()): DemoDb {
       paid_at: iso(paidAt),
       session_id: sessionId,
       note,
+      kind,
       created_at: iso(paidAt),
     })
+  }
+
+  /** 成員|保管人 → 儲值是幾天前；之後保管人墊付的場次由儲值扣，不另外模擬當場付款 */
+  const walletSince = new Map<string, number>()
+  const addTopup = (from: Member, to: Member, amount: number, daysAgo: number) => {
+    addPayment(from, to, amount, at(daysAgo, 21), null, '季租儲值', 'topup')
+    walletSince.set(`${from.id}|${to.id}`, daysAgo)
   }
 
   /** payProb：每位分攤者在同場直接付清的機率；另有小機率只付一半 */
@@ -158,6 +174,7 @@ export function createDemoDb(today = new Date()): DemoDb {
       const r = rand()
       const paidAt = at(Math.max(0, ageDays - 1 - Math.floor(rand() * 3)), 22)
       const from = members.find((m) => m.id === due.member_id)!
+      if ((walletSince.get(`${from.id}|${payer.id}`) ?? -1) > ageDays) continue
       if (r < payProb) addPayment(from, payer, due.amount_due, paidAt, session.id)
       else if (r < payProb + 0.12) addPayment(from, payer, Math.round(due.amount_due / 20) * 10, paidAt, session.id, '先付一半')
     }
@@ -214,6 +231,10 @@ export function createDemoDb(today = new Date()): DemoDb {
       addExpense(session, '飲料', 385, byName('承恩'), attendees.slice(0, Math.max(3, attendees.length - 2)), payProb, age)
     }
   })
+
+  // 羽球長期租場由怡君訂，雅婷先儲值一筆，柏翰儲值的錢已經用完
+  addTopup(byName('雅婷'), byName('怡君'), 2000, 50)
+  addTopup(byName('柏翰'), byName('怡君'), 300, 50)
 
   const badmintonAges = [6, 20, 34, 48, 75]
   const badmintonPayers = ['怡君', '家豪'].map(byName)

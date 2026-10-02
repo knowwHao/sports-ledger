@@ -69,6 +69,9 @@ export interface ExpenseShare {
   amount_due: number
 }
 
+/** topup＝儲值：付給保管人（通常是訂場地的人）先放著，之後他墊付的費用依時間先後從裡面扣 */
+export type PaymentKind = 'payment' | 'topup'
+
 export interface Payment {
   id: Id
   from_member_id: Id
@@ -78,6 +81,7 @@ export interface Payment {
   /** 直接付給該場墊付者時才填 */
   session_id: Id | null
   note: string
+  kind: PaymentKind
   created_at: string
 }
 
@@ -120,7 +124,7 @@ export interface ExpenseInput {
 export type SportInput = Pick<Sport, 'name' | 'emoji' | 'color' | 'default_expenses'>
 
 /** 收款人一律是登入的成員本人，所以不含 to_member_id */
-export type PaymentInput = Pick<Payment, 'from_member_id' | 'amount' | 'paid_at' | 'session_id' | 'note'>
+export type PaymentInput = Pick<Payment, 'from_member_id' | 'amount' | 'paid_at' | 'session_id' | 'note' | 'kind'>
 
 /** 成員輸入密碼後發給這台裝置的憑證，記錄或刪除付款時帶上 */
 export interface MemberSession {
@@ -138,4 +142,5 @@ export interface PaymentPreset {
   title?: string
   /** 鎖住付款人，只讓使用者改金額 */
   fixedParties?: boolean
+  kind?: PaymentKind
 }

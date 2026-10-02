@@ -8,6 +8,9 @@ import {
   sessionSettlements,
   sessionStatuses,
   simplifyDebts,
+  walletCoverage,
+  wallets,
+  withoutWallets,
   type StatusInput,
 } from './balance'
 
@@ -31,8 +34,10 @@ const pay = (from: string, to: string, amount: number, paid_at: string, session_
   paid_at,
   session_id,
   note: '',
+  kind: 'payment',
   created_at: paid_at,
 })
+const topup = (from: string, to: string, amount: number, paid_at: string): Payment => ({ ...pay(from, to, amount, paid_at), kind: 'topup' })
 
 /** 建一筆費用並平均分攤 */
 function expense(id: string, sessionId: string, amount: number, payer: string, participants: string[]) {
@@ -347,5 +352,109 @@ describe('沒有費用的場次', () => {
   it('有費用但未付清的場次為 open', () => {
     const open = ledger(['a', 'b'], [session('s1', '2026-09-01')], [expense('e1', 's1', 600, 'a', ['a', 'b'])])
     expect(sessionStatuses(open).get('s1')).toBe('open')
+  })
+})
+
+describe('儲值金', () => {
+  const T = (d: string) => `${d}T12:00:00.000Z`
+
+  it('儲值後每場自動扣款，剩下的錢不會變成保管人要退的轉帳', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s1', '2026-09-03'), session('s2', '2026-09-10')],
+      [expense('e1', 's1', 600, 'a', ['a', 'b']), expense('e2', 's2', 600, 'a', ['a', 'b'])],
+      [topup('b', 'a', 3000, T('2026-09-01'))],
+    )
+    const [w] = wallets(data)
+    expect(w).toMatchObject({ member: 'b', holder: 'a', balance: 2400 })
+    expect(w.entries.map((e) => [e.kind, e.delta, e.balance])).toEqual([
+      ['topup', 3000, 3000],
+      ['session', -300, 2700],
+      ['session', -300, 2400],
+    ])
+    const bal = withoutWallets(netBalances(data), wallets(data))
+    expect(Object.fromEntries(bal)).toEqual({ a: 0, b: 0 })
+    expect(simplifyDebts(bal)).toEqual([])
+    const st = sessionSettlements(data)
+    expect(st.get('s1')).toBe('direct')
+    expect(st.get('s2')).toBe('direct')
+  })
+
+  it('儲值不足時餘額停在 0，不足的部分變成欠保管人的錢', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s1', '2026-09-03'), session('s2', '2026-09-10')],
+      [expense('e1', 's1', 600, 'a', ['a', 'b']), expense('e2', 's2', 800, 'a', ['a', 'b'])],
+      [topup('b', 'a', 300, T('2026-09-01'))],
+    )
+    const [w] = wallets(data)
+    expect(w.balance).toBe(-400)
+    expect(w.entries.map((e) => e.covered)).toEqual([undefined, 300, 0])
+    const bal = withoutWallets(netBalances(data), wallets(data))
+    expect(simplifyDebts(bal)).toEqual([{ from: 'b', to: 'a', amount: 400 }])
+    const st = sessionSettlements(data)
+    expect(st.get('s1')).toBe('direct')
+    expect(st.has('s2')).toBe(false)
+  })
+
+  it('只扣得到一部分時，扣得到的那部分算已付', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s1', '2026-09-03')],
+      [expense('e1', 's1', 1000, 'a', ['a', 'b'])],
+      [topup('b', 'a', 200, T('2026-09-01'))],
+    )
+    expect(walletCoverage(wallets(data)).get('s1|b|a')).toBe(200)
+    expect(sessionSettlements(data).has('s1')).toBe(false)
+    const paid = { ...data, payments: [...data.payments, pay('b', 'a', 300, T('2026-09-04'), 's1')] }
+    expect(sessionSettlements(paid).get('s1')).toBe('direct')
+  })
+
+  it('儲值前就欠保管人的錢，儲值時先抵掉', () => {
+    const data = ledger(
+      ['a', 'b'],
+      [session('s1', '2026-09-01')],
+      [expense('e1', 's1', 600, 'a', ['a', 'b'])],
+      [topup('b', 'a', 1000, T('2026-09-05'))],
+    )
+    const [w] = wallets(data)
+    expect(w.entries.map((e) => [e.kind, e.balance])).toEqual([
+      ['session', -300],
+      ['topup', 700],
+    ])
+    expect(w.balance).toBe(700)
+    expect(sessionSettlements(data).get('s1')).toBe('netted')
+  })
+
+  it('儲值只抵保管人墊付的費用，欠別人的錢照樣要轉', () => {
+    const data = ledger(
+      ['a', 'b', 'c'],
+      [session('s1', '2026-09-03')],
+      [expense('e1', 's1', 600, 'c', ['b', 'c'])],
+      [topup('b', 'a', 2000, T('2026-09-01'))],
+    )
+    const bal = withoutWallets(netBalances(data), wallets(data))
+    expect(Object.fromEntries(bal)).toEqual({ a: 0, b: -300, c: 300 })
+    expect(simplifyDebts(bal)).toEqual([{ from: 'b', to: 'c', amount: 300 }])
+    expect(sessionSettlements(data).has('s1')).toBe(false)
+  })
+
+  it('儲值給兩位保管人時各自計算，不會互相抵用', () => {
+    const data = ledger(
+      ['a', 'b', 'c'],
+      [session('s1', '2026-09-03'), session('s2', '2026-09-04')],
+      [expense('e1', 's1', 600, 'a', ['a', 'b']), expense('e2', 's2', 1200, 'c', ['b', 'c'])],
+      [topup('b', 'a', 1000, T('2026-09-01')), topup('b', 'c', 500, T('2026-09-01'))],
+    )
+    const byHolder = Object.fromEntries(wallets(data).map((w) => [w.holder, w.balance]))
+    expect(byHolder).toEqual({ a: 700, c: -100 })
+    const bal = withoutWallets(netBalances(data), wallets(data))
+    expect(simplifyDebts(bal)).toEqual([{ from: 'b', to: 'c', amount: 100 }])
+  })
+
+  it('沒有儲值紀錄時不產生儲值帳，一般預付照舊算要收', () => {
+    const data = ledger(['a', 'b'], [], [], [pay('b', 'a', 500, T('2026-09-01'))])
+    expect(wallets(data)).toEqual([])
+    expect(Object.fromEntries(withoutWallets(netBalances(data), []))).toEqual({ a: -500, b: 500 })
   })
 })

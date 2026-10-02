@@ -257,6 +257,7 @@ export const useLedgerStore = defineStore('ledger', () => {
   async function createPayment(input: PaymentInput) {
     if (input.amount <= 0) throw new Error('金額必須大於 0')
     if (input.from_member_id === currentSession()?.memberId) throw new Error('付款人與收款人不能是同一人')
+    if (input.kind === 'topup' && input.session_id) throw new Error('儲值不能指定場次')
     await asPayee(null, (auth) => repo.createPayment(auth, input))
   }
 
@@ -273,6 +274,7 @@ export const useLedgerStore = defineStore('ledger', () => {
         paid_at: new Date().toISOString(),
         session_id: null,
         note: '轉帳建議',
+        kind: 'payment',
       }),
     )
   }
@@ -285,6 +287,7 @@ export const useLedgerStore = defineStore('ledger', () => {
         paid_at: new Date().toISOString(),
         session_id: sessionId,
         note: '',
+        kind: 'payment',
       }),
     )
   }

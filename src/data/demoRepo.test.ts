@@ -13,7 +13,14 @@ async function loginAs(name: string, pin = '0000'): Promise<MemberSession> {
 }
 
 const idOf = async (name: string) => (await repo.loadLedger()).members.find((x) => x.name === name)!.id
-const payment = (from: string) => ({ from_member_id: from, amount: 100, paid_at: new Date().toISOString(), session_id: null, note: '' })
+const payment = (from: string) => ({
+  from_member_id: from,
+  amount: 100,
+  paid_at: new Date().toISOString(),
+  session_id: null as string | null,
+  note: '',
+  kind: 'payment' as const,
+})
 
 beforeEach(() => {
   repo = new DemoRepo()
@@ -93,5 +100,16 @@ describe('只有收款人能記錄與刪除付款', () => {
     await expect(repo.deletePayments(someone, [id])).rejects.toBeInstanceOf(NotPayeeError)
     await repo.deletePayments(payee, [id])
     expect((await repo.loadLedger()).payments.some((p) => p.id === id)).toBe(false)
+  })
+})
+
+describe('儲值', () => {
+  it('由保管人記錄，不能指定場次', async () => {
+    const holder = await loginAs('怡君')
+    const from = await idOf('冠廷')
+    const sessionId = (await repo.loadLedger()).sessions[0].id
+    await expect(repo.createPayment(holder, { ...payment(from), kind: 'topup', session_id: sessionId })).rejects.toThrow()
+    await repo.createPayment(holder, { ...payment(from), kind: 'topup' })
+    expect((await repo.loadLedger()).payments.at(-1)).toMatchObject({ kind: 'topup', from_member_id: from, to_member_id: holder.memberId })
   })
 })
