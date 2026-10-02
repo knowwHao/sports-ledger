@@ -12,6 +12,7 @@ import {
   type SettleReason,
   type Transfer,
   type Wallet,
+  type WalletEntry,
 } from './balance'
 import { sessionSortKey } from './format'
 
@@ -184,4 +185,17 @@ export function walletsOf(list: Wallet[], memberId: Id): Wallet[] {
 
 export function walletsHeldBy(list: Wallet[], holderId: Id): Wallet[] {
   return list.filter((w) => w.holder === holderId)
+}
+
+export interface WalletHistory {
+  /** 第一筆儲值前兩人之間的結餘，負數＝當時還欠保管人 */
+  opening: number
+  /** 從第一筆儲值開始，由舊到新 */
+  entries: WalletEntry[]
+}
+
+/** 儲值前的往來還不是儲值，逐筆列出會把當時的一般欠款誤標成「儲值不足」，所以合併成期初 */
+export function walletHistory(w: Wallet): WalletHistory {
+  const first = Math.max(0, w.entries.findIndex((e) => e.kind === 'topup'))
+  return { opening: first ? w.entries[first - 1].balance : 0, entries: w.entries.slice(first) }
 }
